@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payment - Zoho Reconciliation</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --line:#dfe3e8; --text:#1c2430; --muted:#66707d; --accent:#2457d6; --accent-d:#1b44a8;
+          --ok:#137a3d; --ok-bg:#e0f5e8; --warn:#9a5b00; --warn-bg:#fff0d4; --bad:#b3261e; --bad-bg:#fde4e2; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:14px 24px; background:#101828; color:#fff; font-size:17px; font-weight:600; }
+  main { padding:18px 24px 40px; max-width:1800px; margin:0 auto; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
+  h2 { margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+
+  /* upload segment: two spaces side by side, buttons underneath */
+  .uploads { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  @media (max-width:800px) { .uploads { grid-template-columns:1fr; } }
+  .drop { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; min-height:110px; border:2px dashed #b9c2cf;
+          border-radius:8px; background:#fafbfc; cursor:pointer; text-align:center; padding:12px; transition:.15s; }
+  .drop:hover, .drop.over { border-color:var(--accent); background:#eef3ff; }
+  .drop input { display:none; }
+  .drop .fname { font-weight:600; word-break:break-all; }
+  .drop .hint { color:var(--muted); font-size:12.5px; }
+  .msg { min-height:20px; margin-top:8px; font-size:13px; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--bad); } .msg .w { color:var(--warn); display:block; }
+  .meta { color:var(--muted); font-size:12.5px; margin-top:4px; }
+
+  button { font:inherit; cursor:pointer; border-radius:7px; border:1px solid var(--line); background:#fff; padding:7px 14px; }
+  button:hover:not(:disabled) { border-color:#aab3c0; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button.primary:hover:not(:disabled) { background:var(--accent-d); border-color:var(--accent-d); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .upbtn { width:100%; margin-top:10px; }
+
+  .matchbar { margin:16px 0; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .matchbar .big { padding:10px 34px; font-size:15px; }
+  .matchbar label { display:flex; gap:6px; align-items:center; color:var(--muted); cursor:pointer; }
+  .banner { padding:8px 12px; border-radius:7px; background:var(--warn-bg); color:var(--warn); font-size:13px; }
+
+  .tabs { display:flex; gap:4px; border-bottom:2px solid var(--line); }
+  .tab { border:none; background:none; padding:10px 18px; border-radius:8px 8px 0 0; font-weight:600; color:var(--muted); margin-bottom:-2px; border-bottom:2px solid transparent; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); background:#fff; }
+  .panel { display:none; background:#fff; border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; padding:14px; }
+  .panel.active { display:block; }
+
+  .filters { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:flex-end; margin-bottom:12px; }
+  .filters label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  .filters select, .filters input { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; min-width:130px; background:#fff; color:var(--text); }
+  .filters input.date { width:120px; min-width:0; }
+  .filters input.bad { border-color:var(--bad); background:var(--bad-bg); }
+  .chips { display:flex; gap:6px; }
+  .chip { padding:5px 12px; border-radius:999px; font-size:13px; }
+  .chip.active { background:var(--text); color:#fff; border-color:var(--text); }
+  .err-line { color:var(--bad); font-size:12.5px; margin-bottom:8px; }
+
+  .tablewrap { overflow:auto; max-height:62vh; border:1px solid var(--line); border-radius:8px; }
+  table { border-collapse:separate; border-spacing:0; width:max-content; min-width:100%; font-size:13px; }
+  th, td { padding:6px 10px; border-bottom:1px solid #edf0f3; white-space:nowrap; text-align:left; max-width:340px; overflow:hidden; text-overflow:ellipsis; }
+  th { position:sticky; top:0; background:#f0f3f7; z-index:2; font-weight:600; border-bottom:1px solid var(--line); }
+  tr:hover td { background:#fafcff; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .badge { display:inline-block; padding:2px 9px; border-radius:999px; font-weight:600; font-size:12px; }
+  .b-Matched { background:var(--ok-bg); color:var(--ok); } .b-Mismatched { background:var(--warn-bg); color:var(--warn); } .b-Missing { background:var(--bad-bg); color:var(--bad); }
+  td select, td input { font:inherit; padding:3px 6px; border:1px solid var(--line); border-radius:5px; background:#fff; }
+  td input.remarks { width:220px; }
+  td.saved select, td.saved input { border-color:#7cc99a; }
+  th.added { background:#e6edff; }
+  .pager { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); }
+  .empty { padding:40px; text-align:center; color:var(--muted); }
+  .diffpos { color:var(--warn); } .diffneg { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>Payment &harr; Zoho Reconciliation</header>
+<main>
+
+  <!-- 1. UPLOAD SEGMENT -->
+  <section class="uploads">
+    <div class="card" id="card-payments">
+      <h2>Zoho sheet</h2>
+      <label class="drop" data-kind="payments">
+        <input type="file" accept=".xlsx,.xlsm">
+        <span class="fname">Click or drop the file here</span>
+        <span class="hint">Full list of customer payments (.xlsx)</span>
+      </label>
+      <button class="primary upbtn" disabled>Upload Zoho Sheet</button>
+      <div class="msg"></div>
+      <div class="meta"></div>
+    </div>
+    <div class="card" id="card-zoho">
+      <h2>Razorpay sheet</h2>
+      <label class="drop" data-kind="zoho">
+        <input type="file" accept=".xlsx,.xlsm">
+        <span class="fname">Click or drop the file here</span>
+        <span class="hint">Monthly Razorpay payments (.xlsx)</span>
+      </label>
+      <button class="primary upbtn" disabled>Upload Razorpay Sheet</button>
+      <div class="msg"></div>
+      <div class="meta"></div>
+    </div>
+  </section>
+
+  <!-- 2. MATCH BUTTON -->
+  <section class="matchbar">
+    <button class="primary big" id="matchBtn" disabled>Match</button>
+    <label title="Razorpay 'amount' includes the gateway fee; the customer payment sheet records the invoice amount. When ticked, amount minus fee equal to the payment amount counts as a match.">
+      <input type="checkbox" id="feeAdjust" checked> Treat amount net of Razorpay fee as matching
+    </label>
+    <span id="matchInfo" class="meta"></span>
+    <span id="stale" class="banner" hidden>Data changed since the last match - click Match to refresh.</span>
+  </section>
+
+  <!-- 3. TABS -->
+  <nav class="tabs">
+    <button class="tab active" data-tab="match">Match / Mismatch</button>
+    <button class="tab" data-tab="pay">Zoho Sheet</button>
+    <button class="tab" data-tab="zoho">Razorpay Sheet</button>
+  </nav>
+
+  <section class="panel active" id="panel-match">
+    <div class="filters">
+      <div class="chips" id="chips"></div>
+      <label>Razorpay status
+        <select id="m-status"></select>
+      </label>
+      <label>Search (id / notes / description)
+        <input id="m-q" placeholder="e.g. pay_Ry...">
+      </label>
+    </div>
+    <div class="filters dl">
+      <span class="meta">Download Excel:</span>
+      <button data-dl="All">All tables (3 sheets)</button><button data-dl="Matched">Matched</button>
+      <button data-dl="Mismatched">Mismatched</button><button data-dl="Missing">Missing</button>
+    </div>
+    <div id="m-table"></div>
+    <div class="pager" id="m-pager"></div>
+  </section>
+
+  <section class="panel" id="panel-pay">
+    <div class="filters">
+      <label>Mode <select id="p-mode"><option value="">All</option></select></label>
+      <label>Deposit To <select id="p-dep"><option value="">All</option></select></label>
+      <label>Currency <select id="p-currency"><option value="">All</option></select></label>
+      <label>Date from (yyyy-mm-dd) <input class="date" id="p-from" placeholder="yyyy-mm-dd" maxlength="10"></label>
+      <label>Date to (yyyy-mm-dd) <input class="date" id="p-to" placeholder="yyyy-mm-dd" maxlength="10"></label>
+      <button id="p-apply">Apply</button><button id="p-reset">Reset</button>
+    </div>
+    <div class="err-line" id="p-err"></div>
+    <div id="p-table"></div>
+    <div class="pager" id="p-pager"></div>
+  </section>
+
+  <section class="panel" id="panel-zoho">
+    <div class="filters">
+      <label>Method <select id="z-method"><option value="">All</option></select></label>
+      <label>Currency <select id="z-currency"><option value="">All</option></select></label>
+      <label>Date from (dd/mm/yyyy) <input class="date" id="z-from" placeholder="dd/mm/yyyy" maxlength="10"></label>
+      <label>Date to (dd/mm/yyyy) <input class="date" id="z-to" placeholder="dd/mm/yyyy" maxlength="10"></label>
+      <button id="z-apply">Apply</button><button id="z-reset">Reset</button>
+    </div>
+    <div class="err-line" id="z-err"></div>
+    <div id="z-table"></div>
+    <div class="pager" id="z-pager"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const PAGE = 100;
+const esc = v => v == null ? "" : String(v).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const money = v => v == null ? "" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  let body = null; try { body = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((body && body.detail) || `Request failed (${r.status})`);
+  return body;
+}
+const qs = o => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== "" && v != null)).toString();
+const fmtTs = t => t ? t.replace("T", " ") : "never";
+
+/* ---------------- upload cards ---------------- */
+function setupUpload(id, kind, label) {
+  const card = $("#" + id), input = $("input", card), drop = $(".drop", card), btn = $(".upbtn", card), msg = $(".msg", card);
+  const pick = f => { input.files_ = f; $(".fname", drop).textContent = f ? f.name : "Click or drop the file here"; btn.disabled = !f; msg.textContent = ""; };
+  input.onchange = () => pick(input.files[0]);
+  ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(e => drop.addEventListener(e, () => drop.classList.remove("over")));
+  drop.addEventListener("drop", ev => { ev.preventDefault(); if (ev.dataTransfer.files[0]) pick(ev.dataTransfer.files[0]); });
+  btn.onclick = async () => {
+    const f = input.files_; if (!f) return;
+    btn.disabled = true; btn.textContent = "Uploading..."; msg.className = "msg";
+    try {
+      const fd = new FormData(); fd.append("file", f);
+      const res = await api("/api/upload/" + kind, { method: "POST", body: fd });
+      msg.className = "msg ok";
+      msg.innerHTML = esc(res.message) + (res.warnings || []).map(w => `<span class="w">&#9888; ${esc(w)}</span>`).join("");
+      await refreshStatus(); reloadAll();
+    } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
+    btn.textContent = label; btn.disabled = false;
+  };
+}
+setupUpload("card-payments", "payments", "Upload Zoho Sheet");
+setupUpload("card-zoho", "zoho", "Upload Razorpay Sheet");
+
+/* ---------------- status + match ---------------- */
+async function refreshStatus() {
+  const s = await api("/api/status");
+  $("#card-payments .meta").textContent = s.payments_rows ? `In database: ${s.payments_rows.toLocaleString()} rows (loaded ${fmtTs(s.payments_loaded_at)})` : "Nothing uploaded yet";
+  $("#card-zoho .meta").textContent = s.zoho_rows ? `In database: ${s.zoho_rows.toLocaleString()} rows (loaded ${fmtTs(s.zoho_loaded_at)})` : "Nothing uploaded yet";
+  $("#matchBtn").disabled = !(s.payments_rows && s.zoho_rows);
+  $("#matchInfo").textContent = s.matched_at ? `Last matched: ${fmtTs(s.matched_at)}` : "";
+  $("#stale").hidden = !s.stale;
+  $("#feeAdjust").checked = s.fee_adjust;
+}
+$("#matchBtn").onclick = async () => {
+  const b = $("#matchBtn"); b.disabled = true; b.textContent = "Matching...";
+  try {
+    await api("/api/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fee_adjust: $("#feeAdjust").checked }) });
+    activate("match"); mState.page = 1; await loadMatches();
+  } catch (e) { alert(e.message); }
+  b.textContent = "Match"; await refreshStatus();
+};
+
+/* ---------------- tabs ---------------- */
+function activate(name) {
+  $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+  $$(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + name));
+  ({ match: loadMatches, pay: loadPay, zoho: loadZoho })[name]();
+}
+$$(".tab").forEach(t => t.onclick = () => activate(t.dataset.tab));
+function reloadAll() { const a = $(".tab.active").dataset.tab; activate(a); }
+
+/* ---------------- generic table + pager ---------------- */
+function pager(el, state, total, load) {
+  const pages = Math.max(1, Math.ceil(total / PAGE)), from = total ? (state.page - 1) * PAGE + 1 : 0, to = Math.min(total, state.page * PAGE);
+  el.innerHTML = `<button ${state.page <= 1 ? "disabled" : ""} data-d="-1">&larr; Prev</button>
+    <span>${from.toLocaleString()}&ndash;${to.toLocaleString()} of ${total.toLocaleString()} &middot; page ${state.page} / ${pages}</span>
+    <button ${state.page >= pages ? "disabled" : ""} data-d="1">Next &rarr;</button>`;
+  $$("button", el).forEach(b => b.onclick = () => { state.page += +b.dataset.d; load(); });
+}
+function plainTable(el, cols, rows) {
+  if (!cols.length) { el.innerHTML = `<div class="empty">No data yet - upload the sheet above.</div>`; return; }
+  if (!rows.length) { el.innerHTML = `<div class="empty">No rows match these filters.</div>`; return; }
+  el.innerHTML = `<div class="tablewrap"><table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => `<tr>${r.map(v => `<td title="${esc(v)}">${esc(v)}</td>`).join("")}</tr>`).join("") + `</tbody></table></div>`;
+}
+function setOptions(sel, values, keepFirst = true) {
+  const cur = sel.value; sel.innerHTML = (keepFirst ? `<option value="">All</option>` : "") + values.map(v => `<option>${esc(v)}</option>`).join(""); sel.value = cur;
+}
+const dateOk = (el, re) => { const ok = !el.value || re.test(el.value.trim()); el.classList.toggle("bad", !ok); return ok; };
+const RE_ISO = /^\d{4}-\d{2}-\d{2}$/, RE_DMY = /^\d{2}\/\d{2}\/\d{4}$/;
+
+/* ---------------- Payments tab ---------------- */
+const pState = { page: 1 };
+async function loadPay() {
+  $("#p-err").textContent = "";
+  if (!dateOk($("#p-from"), RE_ISO) | !dateOk($("#p-to"), RE_ISO)) { $("#p-err").textContent = "Dates must be in yyyy-mm-dd format, same as the sheet."; return; }
+  try {
+    const d = await api("/api/payments?" + qs({ mode: $("#p-mode").value, deposit_to: $("#p-dep").value, currency: $("#p-currency").value, date_from: $("#p-from").value.trim(), date_to: $("#p-to").value.trim(), page: pState.page, page_size: PAGE }));
+    setOptions($("#p-mode"), d.modes); setOptions($("#p-dep"), d.deposit_tos); setOptions($("#p-currency"), d.currencies);
+    plainTable($("#p-table"), d.columns, d.rows); pager($("#p-pager"), pState, d.total, loadPay);
+  } catch (e) { $("#p-err").textContent = e.message; }
+}
+const pApply = () => { pState.page = 1; loadPay(); };
+$("#p-apply").onclick = pApply; $("#p-mode").onchange = pApply; $("#p-dep").onchange = pApply; $("#p-currency").onchange = pApply;
+$$("#p-from,#p-to").forEach(i => i.onkeydown = e => e.key === "Enter" && pApply());
+$("#p-reset").onclick = () => { ["#p-mode", "#p-dep", "#p-currency", "#p-from", "#p-to"].forEach(s => $(s).value = ""); pApply(); };
+
+/* ---------------- Zoho tab ---------------- */
+const zState = { page: 1 };
+async function loadZoho() {
+  $("#z-err").textContent = "";
+  if (!dateOk($("#z-from"), RE_DMY) | !dateOk($("#z-to"), RE_DMY)) { $("#z-err").textContent = "Dates must be in dd/mm/yyyy format, same as the sheet."; return; }
+  try {
+    const d = await api("/api/zoho?" + qs({ method: $("#z-method").value, currency: $("#z-currency").value, date_from: $("#z-from").value.trim(), date_to: $("#z-to").value.trim(), page: zState.page, page_size: PAGE }));
+    setOptions($("#z-method"), d.methods); setOptions($("#z-currency"), d.currencies);
+    plainTable($("#z-table"), d.columns, d.rows); pager($("#z-pager"), zState, d.total, loadZoho);
+  } catch (e) { $("#z-err").textContent = e.message; }
+}
+const zApply = () => { zState.page = 1; loadZoho(); };
+$("#z-apply").onclick = zApply; $("#z-method").onchange = zApply; $("#z-currency").onchange = zApply;
+$$("#z-from,#z-to").forEach(i => i.onkeydown = e => e.key === "Enter" && zApply());
+$("#z-reset").onclick = () => { ["#z-method", "#z-currency", "#z-from", "#z-to"].forEach(s => $(s).value = ""); zApply(); };
+
+/* ---------------- Match / Mismatch tab ---------------- */
+const mState = { page: 1, result: "All", status: null, q: "" };
+let agentList = [];
+async function loadMatches() {
+  const d = await api("/api/matches?" + qs({ result: mState.result, status: mState.status ?? "captured", q: mState.q, page: mState.page, page_size: PAGE }));
+  agentList = d.agents || [];
+  // status dropdown (default: captured - failed attempts never reach Zoho, so they are noise here)
+  const sel = $("#m-status");
+  if (mState.status === null && d.statuses.length) mState.status = d.statuses.includes("captured") ? "captured" : "All";
+  sel.innerHTML = `<option value="All">All statuses</option>` + d.statuses.map(s => `<option>${esc(s)}</option>`).join("");
+  sel.value = mState.status ?? "captured";
+  $("#chips").innerHTML = ["All", "Matched", "Mismatched", "Missing"].map(r =>
+    `<button class="chip ${mState.result === r ? "active" : ""}" data-r="${r}">${r} (${(d.counts[r] || 0).toLocaleString()})</button>`).join("");
+  $$("#chips .chip").forEach(b => b.onclick = () => { mState.result = b.dataset.r; mState.page = 1; loadMatches(); });
+
+  const el = $("#m-table");
+  if (!d.counts.All && !mState.q) {
+    el.innerHTML = `<div class="empty">No results yet - upload both sheets and click <b>Match</b>.</div>`; $("#m-pager").innerHTML = ""; return;
+  }
+  const head = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Difference", "Amount Basis"];
+  const agentOpts = cur => ["Unassigned", ...new Set([...agentList, ...(cur ? [cur] : [])])].map(a => `<option ${a === (cur || "Unassigned") ? "selected" : ""}>${esc(a)}</option>`).join("");
+  el.innerHTML = `<div class="tablewrap"><table><thead><tr>
+      <th class="added">Invoice Number</th>
+      ${d.columns.map(c => `<th>${esc(c)}</th>`).join("")}${head.map((h, i) => `<th class="${i === 2 || i === 3 ? "added" : ""}">${h}</th>`).join("")}</tr></thead><tbody>` +
+    d.rows.map(r => {
+      const needsAgent = r.result !== "Matched";
+      const dcls = r.difference == null || Math.abs(r.difference) < 0.005 ? "" : r.difference > 0 ? "diffpos" : "diffneg";
+      return `<tr data-id="${esc(r.id)}">
+        <td title="${esc(r.invoice_number)}">${esc(r.invoice_number) || "&mdash;"}</td>
+        ${r.cells.map(v => `<td title="${esc(v)}">${esc(v)}</td>`).join("")}
+        <td><span class="badge b-${r.result}">${r.result}</span></td>
+        <td>${esc(r.matched_by)}</td>
+        <td>${needsAgent ? `<select class="agent">${agentOpts(r.agent)}</select>` : "&mdash;"}</td>
+        <td><input class="remarks" placeholder="Add remark..." value="${esc(r.remarks)}"></td>
+        <td class="num">${money(r.payment_amount)}</td><td class="num ${dcls}">${money(r.difference)}</td><td>${esc(r.basis)}</td></tr>`;
+    }).join("") + `</tbody></table></div>`;
+  if (!d.rows.length) el.innerHTML = `<div class="empty">No rows for this filter.</div>`;
+  pager($("#m-pager"), mState, d.total, loadMatches);
+}
+async function saveAnnotation(td, body) {
+  try { await api("/api/annotation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); td.classList.add("saved"); setTimeout(() => td.classList.remove("saved"), 1200); }
+  catch (e) { alert("Could not save: " + e.message); }
+}
+$("#m-table").addEventListener("change", e => {
+  const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+  if (e.target.matches("select.agent")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, agent: e.target.value });
+  if (e.target.matches("input.remarks")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, remarks: e.target.value });
+});
+$$("[data-dl]").forEach(b => b.onclick = () => {
+  window.location = "/api/matches/export?" + qs({ result: b.dataset.dl, status: mState.status ?? "captured" });
+});
+$("#m-status").onchange = e => { mState.status = e.target.value; mState.page = 1; loadMatches(); };
+let qTimer; $("#m-q").oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { mState.q = e.target.value; mState.page = 1; loadMatches(); }, 300); };
+
+/* ---------------- boot ---------------- */
+(async () => { await refreshStatus(); loadMatches(); })();
+</script>
+</body>
+</html>
