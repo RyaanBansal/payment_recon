@@ -47,6 +47,57 @@ def public(cols):
     return [c for c in cols if not c.startswith("_")]
 
 
+# Result after any manual override. Only Matched <-> Mismatched can be flipped; Missing rows are never overridden.
+EFF = ("CASE WHEN m.result IN ('Matched','Mismatched') AND a.override IN ('Matched','Mismatched') "
+       "THEN a.override ELSE m.result END")
+
+
+def basis_text(basis, auto, eff):
+    """Amount Basis shown to the user: flags a manual override and what the automatic result was."""
+    return f"Manual override (auto: {auto})" if eff != auto else basis
+
+
+def with_rate_column(cols):
+    """Razorpay sheet columns with 'Currency (Paid In)' (currency of the matched Zoho payment) and 'Exchange Rate'
+    placed right after the currency column. Returns (columns, position of the 'Currency (Paid In)' column)."""
+    cols = list(cols)
+    anchor = next((i for i, c in enumerate(cols) if c.lower() == "currency"), None)
+    if anchor is None:  # no currency column in the sheet: fall back to after amount, else at the end
+        anchor = next((i for i, c in enumerate(cols) if c.lower() == "amount"), len(cols) - 1)
+    pos = anchor + 1
+    return cols[:pos] + ["Currency (Paid In)", "Exchange Rate"] + cols[pos:], pos
+
+
+def effective_rate(rate, currency):
+    """Rate of the matched customer payment (from the Zoho sheet). An INR payment with no match (Missing) is
+    trivially 1; a foreign-currency payment with no match has no rate to use, so it stays blank."""
+    if rate is not None:
+        return rate
+    return 1.0 if (currency or "").strip().upper() == "INR" else None
+
+
+def effective_pay_currency(pay_cur, razorpay_cur):
+    """Currency of the Zoho payment. With no Zoho match (Missing) an INR Razorpay payment is INR, in line with the
+    rate of 1 shown for it; a foreign-currency one stays blank."""
+    if pay_cur:
+        return pay_cur
+    return "INR" if (razorpay_cur or "").strip().upper() == "INR" else None
+
+
+def amount_inr(amount, rate, currency=None):
+    """Razorpay 'amount' x exchange rate. (NOT the Payment Amount column, which comes from the Zoho sheet.)
+    A Razorpay payment already in INR is not converted (its amount is rupees; the rate belongs to the Zoho payment)."""
+    if rate is None:
+        return None
+    try:
+        value = float(str(amount).replace(",", ""))
+        if (currency or "").strip().upper() == "INR":
+            return round(value, 2)
+        return round(value * rate, 2)
+    except (TypeError, ValueError):
+        return None
+
+
 # ---------- status ----------
 @app.get("/api/status")
 def status():
@@ -90,48 +141,62 @@ def match(req: MatchReq):
 
 @app.get("/api/matches")
 def matches(
-    result: str = "All", status: str = "captured", q_: str = Query("", alias="q"),
+    result: str = "All", status: str = "captured", currency: str = "", q_: str = Query("", alias="q"),
     page: int = 1, page_size: int = 100,
 ):
     with conn() as c:
         if not table_exists(c, "zoho"):
-            return {"columns": [], "rows": [], "total": 0, "counts": {}, "statuses": []}
+            return {"columns": [], "rows": [], "total": 0, "counts": {}, "statuses": [], "currencies": []}
         cols = public(get_meta(c, "zoho_cols", []))
+        has_cur = "currency" in {x.lower() for x in cols}
         where, args = ["1=1"], []
         if status and status != "All":
             where.append('z."status" = ?'); args.append(status)
+        if currency and has_cur:
+            where.append('z."currency" = ?'); args.append(currency)
         if q_.strip():
             where.append('(z."id" LIKE ? OR z."notes" LIKE ? OR z."description" LIKE ?)')
             args += [f"%{q_.strip()}%"] * 3
         base = f'FROM zoho z JOIN match_results m ON m.zoho_id = z.id LEFT JOIN annotations a ON a.zoho_id = z.id WHERE {" AND ".join(where)}'
-        counts = {r["result"]: r["n"] for r in c.execute(f"SELECT m.result, COUNT(*) n {base} GROUP BY m.result", args)}
+        counts = {r["res"]: r["n"] for r in c.execute(f"SELECT {EFF} AS res, COUNT(*) n {base} GROUP BY res", args)}
         counts["All"] = sum(counts.values())
         w2, a2 = base, list(args)
         if result != "All":
-            w2 += " AND m.result = ?"; a2.append(result)
+            w2 += f" AND ({EFF}) = ?"; a2.append(result)
         total = c.execute(f"SELECT COUNT(*) {w2}", a2).fetchone()[0]
         lim, off = page_bounds(page, page_size)
         sel = ", ".join(f"z.{q(x)}" for x in cols)
         rs = c.execute(
-            f"SELECT m.result, m.matched_by, m.payment_amount, m.difference, m.basis, m.invoice_number, "
+            f"SELECT {EFF} AS eff, m.result AS auto_result, m.matched_by, m.payment_amount, m.difference, m.basis, m.invoice_number, m.exchange_rate, m.pay_currency, z._fee AS _fee, "
             f"a.agent, a.remarks, z.id AS _id, {sel} "
             f"{w2} ORDER BY z._created, z.id LIMIT ? OFFSET ?", a2 + [lim, off]).fetchall()
-        rows = [{
-            "id": r["_id"], "result": r["result"], "matched_by": r["matched_by"], "payment_amount": r["payment_amount"],
-            "difference": r["difference"], "basis": r["basis"], "invoice_number": r["invoice_number"] or "",
-            "agent": r["agent"], "remarks": r["remarks"] or "",
-            "cells": [r[x] for x in cols],
-        } for r in rs]
+        out_cols, pos = with_rate_column(cols)
+        rows = []
+        for r in rs:
+            cells = [r[x] for x in cols]
+            cur = r[next(x for x in cols if x.lower() == "currency")] if has_cur else None
+            rate = effective_rate(r["exchange_rate"], cur)
+            amt = r[next(x for x in cols if x.lower() == "amount")] if any(x.lower() == "amount" for x in cols) else None
+            cells[pos:pos] = [effective_pay_currency(r["pay_currency"], cur), rate]
+            rows.append({
+                "id": r["_id"], "result": r["eff"], "overridden": r["eff"] != r["auto_result"], "matched_by": r["matched_by"], "payment_amount": r["payment_amount"],
+                "fee": r["_fee"], "amount_inr": amount_inr(amt, rate, cur),
+                "difference": r["difference"], "basis": basis_text(r["basis"], r["auto_result"], r["eff"]), "invoice_number": r["invoice_number"] or "",
+                "agent": r["agent"], "remarks": r["remarks"] or "",
+                "cells": cells,
+            })
+        currencies = [r[0] for r in c.execute('SELECT DISTINCT "currency" FROM zoho WHERE "currency" IS NOT NULL ORDER BY 1')] if has_cur else []
         statuses = [r[0] for r in c.execute('SELECT DISTINCT "status" FROM zoho WHERE "status" IS NOT NULL ORDER BY 1')]
-        return {"columns": cols, "rows": rows, "total": total, "counts": counts, "statuses": statuses,
+        return {"columns": out_cols, "paid_col": pos, "rate_col": pos + 1, "rows": rows, "total": total, "counts": counts, "statuses": statuses,
+                "currencies": currencies,
                 "agents": [r[0] for r in c.execute("SELECT name FROM agents ORDER BY name")]}
 
 
-MATCH_EXTRA = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Difference", "Amount Basis"]
+MATCH_EXTRA = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Fees", "Amount (INR)", "Difference", "Amount Basis"]
 
 
 @app.get("/api/matches/export")
-def export_matches(result: str = "All", status: str = "captured"):
+def export_matches(result: str = "All", status: str = "captured", currency: str = ""):
     """Excel download of the match tables: one sheet each for Matched / Mismatched / Missing (or just one)."""
     if result not in ("All", "Matched", "Mismatched", "Missing"):
         raise HTTPException(400, "Unknown result type")
@@ -139,43 +204,64 @@ def export_matches(result: str = "All", status: str = "captured"):
     wb = Workbook(write_only=True)
     with conn() as c:
         cols = public(get_meta(c, "zoho_cols", []))
+        lower = [x.lower() for x in cols]
+        has_cur = "currency" in lower
+        cur_i = lower.index("currency") if has_cur else None
+        amt_i = lower.index("amount") if "amount" in lower else None
+        out_cols, pos = with_rate_column(cols)
         sel = ", ".join(f"z.{q(x)}" for x in cols)
+        n = len(cols)
         for name in names:
             ws = wb.create_sheet(name)
-            ordered_cols = list(cols)
-            if "Currency" in ordered_cols and "Exchange Rate" in ordered_cols:
-                ex = ordered_cols.pop(ordered_cols.index("Exchange Rate"))
-                ordered_cols.insert(ordered_cols.index("Currency") + 1, ex)
-            ws.append(["Invoice Number"] + ordered_cols + MATCH_EXTRA)
-            where, args = "m.result = ?", [name]
+            ws.append(["Invoice Number"] + out_cols + MATCH_EXTRA)
+            where, args = f"({EFF}) = ?", [name]
             if status and status != "All":
                 where += ' AND z."status" = ?'; args.append(status)
+            if currency and has_cur:
+                where += ' AND z."currency" = ?'; args.append(currency)
+            # row layout: 0 invoice | 1..n sheet cols | n+1 result, matched_by, agent, remarks, payment_amount, difference, basis | exchange_rate
             for r in c.execute(
-                f"SELECT m.invoice_number, {sel}, m.result, m.matched_by, a.agent, a.remarks, "
-                f"m.payment_amount, m.difference, m.basis "
+                f"SELECT m.invoice_number, {sel}, {EFF}, m.matched_by, a.agent, a.remarks, "
+                f"m.payment_amount, m.difference, m.basis, m.exchange_rate, z.\"_fee\", m.pay_currency, m.result "
                 f"FROM zoho z JOIN match_results m ON m.zoho_id = z.id LEFT JOIN annotations a ON a.zoho_id = z.id "
                 f'WHERE {where} ORDER BY z."_created", z."id"', args):
                 v = list(r)
-                n = len(cols) + 1  # "Invoice Number" occupies index 0, then the sheet columns
-                if v[n] != "Matched" and not v[n + 2]:
-                    v[n + 2] = "Unassigned"
-                amount_idx = cols.index("Amount") if "Amount" in cols else -1
-                exchange_idx = cols.index("Exchange Rate") if "Exchange Rate" in cols else -1
-                if amount_idx >= 0 and exchange_idx >= 0:
-                    amount_val = v[1 + amount_idx]
-                    rate_val = v[1 + exchange_idx]
-                    try:
-                        amount_inr = float(str(amount_val).replace(',', '')) * float(str(rate_val).replace(',', ''))
-                    except (TypeError, ValueError):
-                        amount_inr = ""
-                    v.insert(n + 5, amount_inr)
-                else:
-                    v.insert(n + 5, "")
-                ws.append(v)
+                cells = v[1:1 + n]
+                res, matched_by, agent, remarks, pay_amt, diff, basis, rate, fee, pay_cur, auto = v[1 + n:]
+                basis = basis_text(basis, auto, res)
+                if res != "Matched" and not agent:
+                    agent = "Unassigned"
+                rate = effective_rate(rate, cells[cur_i] if has_cur else None)
+                a_inr = amount_inr(cells[amt_i] if amt_i is not None else None, rate, cells[cur_i] if has_cur else None)
+                cells[pos:pos] = [effective_pay_currency(pay_cur, cells[cur_i] if has_cur else None), rate]
+                ws.append([v[0]] + cells + [res, matched_by, agent, remarks, pay_amt, fee, a_inr, diff, basis])
     buf = BytesIO(); wb.save(buf); buf.seek(0)
     fname = f"reconciliation_{'all' if result == 'All' else result.lower()}.xlsx"
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+class Override(BaseModel):
+    zoho_id: str
+    result: str  # "Matched" or "Mismatched": the result the user wants this payment to have
+
+
+@app.post("/api/override")
+def override(o: Override):
+    """Manually flip a payment between Matched and Mismatched. Choosing the automatic result again clears the
+    override. Missing payments have no counterpart to match against, so they can't be overridden."""
+    if o.result not in ("Matched", "Mismatched"):
+        raise HTTPException(400, "Result must be Matched or Mismatched.")
+    with conn() as c:
+        m = c.execute("SELECT result FROM match_results WHERE zoho_id = ?", (o.zoho_id,)).fetchone()
+        if not m:
+            raise HTTPException(404, "Payment not found - click Match first.")
+        if m["result"] == "Missing":
+            raise HTTPException(400, "Missing payments can't be switched to Matched/Mismatched.")
+        c.execute("INSERT OR IGNORE INTO annotations(zoho_id) VALUES (?)", (o.zoho_id,))
+        c.execute("UPDATE annotations SET override = ? WHERE zoho_id = ?",
+                  (None if o.result == m["result"] else o.result, o.zoho_id))
+    return {"ok": True}
 
 
 class Annotation(BaseModel):
@@ -227,10 +313,11 @@ def payments(mode: str = "", deposit_to: str = "", currency: str = "", date_from
         if not table_exists(c, "payments"):
             return {"columns": [], "rows": [], "total": 0, "modes": [], "deposit_tos": [], "currencies": []}
         cols = public(get_meta(c, "payments_cols", []))
+        cur_col = next((x for x in cols if x in ("Currency Code", "Currency")), None)
         where, args = ["1=1"], []
         if mode: where.append('"Mode" = ?'); args.append(mode)
         if deposit_to: where.append('"Deposit To" = ?'); args.append(deposit_to)
-        if currency: where.append('"Currency" = ?'); args.append(currency)
+        if currency and cur_col: where.append(f'{q(cur_col)} = ?'); args.append(currency)
         if d1: where.append('"_date" >= ?'); args.append(d1)
         if d2: where.append('"_date" <= ?'); args.append(d2)
         w = " AND ".join(where)
@@ -238,7 +325,7 @@ def payments(mode: str = "", deposit_to: str = "", currency: str = "", date_from
         lim, off = page_bounds(page, page_size)
         rows = c.execute(f'SELECT {", ".join(q(x) for x in cols)} FROM payments WHERE {w} ORDER BY rowid LIMIT ? OFFSET ?', args + [lim, off]).fetchall()
         distinct = lambda col: [r[0] for r in c.execute(f'SELECT DISTINCT {q(col)} FROM payments WHERE {q(col)} IS NOT NULL ORDER BY 1')]  # noqa: E731
-        currencies = distinct("Currency") if "Currency" in cols else []
+        currencies = distinct(cur_col) if cur_col else []
         return {"columns": cols, "rows": [list(r) for r in rows], "total": total,
                 "modes": distinct("Mode"), "deposit_tos": distinct("Deposit To"), "currencies": currencies}
 
@@ -250,9 +337,10 @@ def zoho(method: str = "", currency: str = "", date_from: str = "", date_to: str
         if not table_exists(c, "zoho"):
             return {"columns": [], "rows": [], "total": 0, "methods": [], "currencies": []}
         cols = public(get_meta(c, "zoho_cols", []))
+        has_cur = "currency" in {x.lower() for x in cols}
         where, args = ["1=1"], []
         if method: where.append('"method" = ?'); args.append(method)
-        if currency: where.append('"Currency" = ?'); args.append(currency)
+        if currency and has_cur: where.append('"currency" = ?'); args.append(currency)
         if d1: where.append('substr("_created",1,10) >= ?'); args.append(d1)
         if d2: where.append('substr("_created",1,10) <= ?'); args.append(d2)
         w = " AND ".join(where)
@@ -260,5 +348,5 @@ def zoho(method: str = "", currency: str = "", date_from: str = "", date_to: str
         lim, off = page_bounds(page, page_size)
         rows = c.execute(f'SELECT {", ".join(q(x) for x in cols)} FROM zoho WHERE {w} ORDER BY "_created", "id" LIMIT ? OFFSET ?', args + [lim, off]).fetchall()
         methods = [r[0] for r in c.execute('SELECT DISTINCT "method" FROM zoho WHERE "method" IS NOT NULL ORDER BY 1')]
-        currencies = [r[0] for r in c.execute('SELECT DISTINCT "Currency" FROM zoho WHERE "Currency" IS NOT NULL ORDER BY 1')] if "Currency" in cols else []
+        currencies = [r[0] for r in c.execute('SELECT DISTINCT "currency" FROM zoho WHERE "currency" IS NOT NULL ORDER BY 1')] if has_cur else []
         return {"columns": cols, "rows": [list(r) for r in rows], "total": total, "methods": methods, "currencies": currencies}

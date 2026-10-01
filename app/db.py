@@ -13,10 +13,10 @@ CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 -- Agent names list: empty for now. Add rows here (or POST /api/agents) and the dropdown fills automatically.
 CREATE TABLE IF NOT EXISTS agents(name TEXT PRIMARY KEY);
 -- Manual inputs, keyed by Zoho/Razorpay payment id so they survive re-uploads and re-matching.
-CREATE TABLE IF NOT EXISTS annotations(zoho_id TEXT PRIMARY KEY, agent TEXT, remarks TEXT);
+CREATE TABLE IF NOT EXISTS annotations(zoho_id TEXT PRIMARY KEY, agent TEXT, remarks TEXT, override TEXT);
 CREATE TABLE IF NOT EXISTS match_results(
     zoho_id TEXT PRIMARY KEY, result TEXT, matched_by TEXT,
-    payment_amount REAL, difference REAL, basis TEXT, invoice_number TEXT
+    payment_amount REAL, difference REAL, basis TEXT, invoice_number TEXT, exchange_rate REAL, pay_currency TEXT
 );
 """
 
@@ -40,6 +40,13 @@ def init_db() -> None:
         cols = {r["name"] for r in c.execute("PRAGMA table_info(match_results)")}
         if "invoice_number" not in cols:
             c.execute("ALTER TABLE match_results ADD COLUMN invoice_number TEXT")
+        if "exchange_rate" not in cols:  # migration: exchange rate of the matched customer payment(s)
+            c.execute("ALTER TABLE match_results ADD COLUMN exchange_rate REAL")
+        # migration: manual Matched/Mismatched override per payment (kept in annotations so it survives re-matching)
+        if "override" not in {r["name"] for r in c.execute("PRAGMA table_info(annotations)")}:
+            c.execute("ALTER TABLE annotations ADD COLUMN override TEXT")
+        if "pay_currency" not in cols:  # migration: currency of the matched customer payment (Zoho sheet)
+            c.execute("ALTER TABLE match_results ADD COLUMN pay_currency TEXT")
 
 
 def now() -> str:

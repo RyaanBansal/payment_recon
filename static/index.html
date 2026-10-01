@@ -69,6 +69,8 @@
   th.added { background:#e6edff; }
   .pager { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); }
   .empty { padding:40px; text-align:center; color:var(--muted); }
+  .badge.manual { outline:2px dashed currentColor; outline-offset:1px; }
+  button.ovr { padding:3px 10px; font-size:12px; white-space:nowrap; }
   .diffpos { color:var(--warn); } .diffneg { color:var(--bad); }
 </style>
 </head>
@@ -105,8 +107,8 @@
   <!-- 2. MATCH BUTTON -->
   <section class="matchbar">
     <button class="primary big" id="matchBtn" disabled>Match</button>
-    <label title="Razorpay 'amount' includes the gateway fee; the customer payment sheet records the invoice amount. When ticked, amount minus fee equal to the payment amount counts as a match.">
-      <input type="checkbox" id="feeAdjust" checked> Treat amount net of Razorpay fee as matching
+    <label title="Razorpay 'amount' includes the gateway fee; the customer payment sheet records the invoice amount. When ticked, Difference = Amount (INR) - Payment Amount - Fees; when unticked the fee is ignored.">
+      <input type="checkbox" id="feeAdjust" checked> Subtract Razorpay fee in the difference when matching
     </label>
     <span id="matchInfo" class="meta"></span>
     <span id="stale" class="banner" hidden>Data changed since the last match - click Match to refresh.</span>
@@ -124,6 +126,9 @@
       <div class="chips" id="chips"></div>
       <label>Razorpay status
         <select id="m-status"></select>
+      </label>
+      <label>Currency
+        <select id="m-currency"><option value="">All</option></select>
       </label>
       <label>Search (id / notes / description)
         <input id="m-q" placeholder="e.g. pay_Ry...">
@@ -171,6 +176,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const PAGE = 100;
 const esc = v => v == null ? "" : String(v).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const rate = v => Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 6 });
 const money = v => v == null ? "" : Number(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 async function api(url, opts) {
@@ -287,56 +293,70 @@ $$("#z-from,#z-to").forEach(i => i.onkeydown = e => e.key === "Enter" && zApply(
 $("#z-reset").onclick = () => { ["#z-method", "#z-currency", "#z-from", "#z-to"].forEach(s => $(s).value = ""); zApply(); };
 
 /* ---------------- Match / Mismatch tab ---------------- */
-const mState = { page: 1, result: "All", status: null, q: "" };
+const mState = { page: 1, result: "All", status: null, currency: "", q: "" };
 let agentList = [];
-async function loadMatches() {
-  const d = await api("/api/matches?" + qs({ result: mState.result, status: mState.status ?? "captured", q: mState.q, page: mState.page, page_size: PAGE }));
+async function loadMatches(keepScroll = false) {
+  const oldWrap = keepScroll ? $("#m-table .tablewrap") : null;
+  const sx = oldWrap ? oldWrap.scrollLeft : 0, sy = oldWrap ? oldWrap.scrollTop : 0;
+  const d = await api("/api/matches?" + qs({ result: mState.result, status: mState.status ?? "captured", currency: mState.currency, q: mState.q, page: mState.page, page_size: PAGE }));
   agentList = d.agents || [];
   // status dropdown (default: captured - failed attempts never reach Zoho, so they are noise here)
   const sel = $("#m-status");
   if (mState.status === null && d.statuses.length) mState.status = d.statuses.includes("captured") ? "captured" : "All";
   sel.innerHTML = `<option value="All">All statuses</option>` + d.statuses.map(s => `<option>${esc(s)}</option>`).join("");
   sel.value = mState.status ?? "captured";
+  setOptions($("#m-currency"), d.currencies || []);
   $("#chips").innerHTML = ["All", "Matched", "Mismatched", "Missing"].map(r =>
     `<button class="chip ${mState.result === r ? "active" : ""}" data-r="${r}">${r} (${(d.counts[r] || 0).toLocaleString()})</button>`).join("");
   $$("#chips .chip").forEach(b => b.onclick = () => { mState.result = b.dataset.r; mState.page = 1; loadMatches(); });
 
   const el = $("#m-table");
-  if (!d.counts.All && !mState.q) {
+  if (!d.counts.All && !mState.q && !mState.currency) {
     el.innerHTML = `<div class="empty">No results yet - upload both sheets and click <b>Match</b>.</div>`; $("#m-pager").innerHTML = ""; return;
   }
-  const head = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Difference", "Amount Basis"];
+  const head = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Fees", "Amount (INR)", "Difference", "Amount Basis", "Manual Override"];
   const agentOpts = cur => ["Unassigned", ...new Set([...agentList, ...(cur ? [cur] : [])])].map(a => `<option ${a === (cur || "Unassigned") ? "selected" : ""}>${esc(a)}</option>`).join("");
   el.innerHTML = `<div class="tablewrap"><table><thead><tr>
       <th class="added">Invoice Number</th>
-      ${d.columns.map(c => `<th>${esc(c)}</th>`).join("")}${head.map((h, i) => `<th class="${i === 2 || i === 3 ? "added" : ""}">${h}</th>`).join("")}</tr></thead><tbody>` +
+      ${d.columns.map((c, i) => `<th class="${i === d.rate_col || i === d.paid_col ? "added" : ""}">${esc(c)}</th>`).join("")}${head.map((h, i) => `<th class="${i === 2 || i === 3 ? "added" : ""}">${h}</th>`).join("")}</tr></thead><tbody>` +
     d.rows.map(r => {
       const needsAgent = r.result !== "Matched";
       const dcls = r.difference == null || Math.abs(r.difference) < 0.005 ? "" : r.difference > 0 ? "diffpos" : "diffneg";
       return `<tr data-id="${esc(r.id)}">
         <td title="${esc(r.invoice_number)}">${esc(r.invoice_number) || "&mdash;"}</td>
-        ${r.cells.map(v => `<td title="${esc(v)}">${esc(v)}</td>`).join("")}
-        <td><span class="badge b-${r.result}">${r.result}</span></td>
+        ${r.cells.map((v, i) => i === d.rate_col ? `<td class="num" title="${esc(v)}">${v == null ? "&mdash;" : esc(rate(v))}</td>` : `<td title="${esc(v)}">${esc(v)}</td>`).join("")}
+        <td><span class="badge b-${r.result} ${r.overridden ? "manual" : ""}" ${r.overridden ? 'title="Manually changed - click the button on the far right to undo"' : ""}>${r.result}${r.overridden ? " &#9998;" : ""}</span></td>
         <td>${esc(r.matched_by)}</td>
         <td>${needsAgent ? `<select class="agent">${agentOpts(r.agent)}</select>` : "&mdash;"}</td>
         <td><input class="remarks" placeholder="Add remark..." value="${esc(r.remarks)}"></td>
-        <td class="num">${money(r.payment_amount)}</td><td class="num ${dcls}">${money(r.difference)}</td><td>${esc(r.basis)}</td></tr>`;
+        <td class="num">${money(r.payment_amount)}</td><td class="num">${r.fee == null ? "&mdash;" : money(r.fee)}</td><td class="num">${r.amount_inr == null ? "&mdash;" : money(r.amount_inr)}</td><td class="num ${dcls}">${money(r.difference)}</td><td>${esc(r.basis)}</td>
+        <td>${r.result === "Missing" ? "&mdash;" : `<button class="ovr" data-to="${r.result === "Matched" ? "Mismatched" : "Matched"}">${r.overridden ? "Undo &middot; " : ""}Mark ${r.result === "Matched" ? "Mismatched" : "Matched"}</button>`}</td></tr>`;
     }).join("") + `</tbody></table></div>`;
   if (!d.rows.length) el.innerHTML = `<div class="empty">No rows for this filter.</div>`;
   pager($("#m-pager"), mState, d.total, loadMatches);
+  const wrap = $("#m-table .tablewrap"); if (wrap && keepScroll) { wrap.scrollLeft = sx; wrap.scrollTop = sy; }
 }
 async function saveAnnotation(td, body) {
   try { await api("/api/annotation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); td.classList.add("saved"); setTimeout(() => td.classList.remove("saved"), 1200); }
   catch (e) { alert("Could not save: " + e.message); }
 }
+$("#m-table").addEventListener("click", async e => {
+  const b = e.target.closest("button.ovr"); if (!b) return;
+  const tr = b.closest("tr[data-id]"); b.disabled = true;
+  try {
+    await api("/api/override", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zoho_id: tr.dataset.id, result: b.dataset.to }) });
+    await loadMatches(true);
+  } catch (err) { alert("Could not change the result: " + err.message); b.disabled = false; }
+});
 $("#m-table").addEventListener("change", e => {
   const tr = e.target.closest("tr[data-id]"); if (!tr) return;
   if (e.target.matches("select.agent")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, agent: e.target.value });
   if (e.target.matches("input.remarks")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, remarks: e.target.value });
 });
 $$("[data-dl]").forEach(b => b.onclick = () => {
-  window.location = "/api/matches/export?" + qs({ result: b.dataset.dl, status: mState.status ?? "captured" });
+  window.location = "/api/matches/export?" + qs({ result: b.dataset.dl, status: mState.status ?? "captured", currency: mState.currency });
 });
+$("#m-currency").onchange = e => { mState.currency = e.target.value; mState.page = 1; loadMatches(); };
 $("#m-status").onchange = e => { mState.status = e.target.value; mState.page = 1; loadMatches(); };
 let qTimer; $("#m-q").oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { mState.q = e.target.value; mState.page = 1; loadMatches(); }, 300); };
 
