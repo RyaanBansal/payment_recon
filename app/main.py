@@ -47,16 +47,6 @@ def public(cols):
     return [c for c in cols if not c.startswith("_")]
 
 
-# Result after any manual override. Only Matched <-> Mismatched can be flipped; Missing rows are never overridden.
-EFF = ("CASE WHEN m.result IN ('Matched','Mismatched') AND a.override IN ('Matched','Mismatched') "
-       "THEN a.override ELSE m.result END")
-
-
-def basis_text(basis, auto, eff):
-    """Amount Basis shown to the user: flags a manual override and what the automatic result was."""
-    return f"Manual override (auto: {auto})" if eff != auto else basis
-
-
 def with_rate_column(cols):
     """Razorpay sheet columns with 'Currency (Paid In)' (currency of the matched Zoho payment) and 'Exchange Rate'
     placed right after the currency column. Returns (columns, position of the 'Currency (Paid In)' column)."""
@@ -158,16 +148,16 @@ def matches(
             where.append('(z."id" LIKE ? OR z."notes" LIKE ? OR z."description" LIKE ?)')
             args += [f"%{q_.strip()}%"] * 3
         base = f'FROM zoho z JOIN match_results m ON m.zoho_id = z.id LEFT JOIN annotations a ON a.zoho_id = z.id WHERE {" AND ".join(where)}'
-        counts = {r["res"]: r["n"] for r in c.execute(f"SELECT {EFF} AS res, COUNT(*) n {base} GROUP BY res", args)}
+        counts = {r["result"]: r["n"] for r in c.execute(f"SELECT m.result, COUNT(*) n {base} GROUP BY m.result", args)}
         counts["All"] = sum(counts.values())
         w2, a2 = base, list(args)
         if result != "All":
-            w2 += f" AND ({EFF}) = ?"; a2.append(result)
+            w2 += " AND m.result = ?"; a2.append(result)
         total = c.execute(f"SELECT COUNT(*) {w2}", a2).fetchone()[0]
         lim, off = page_bounds(page, page_size)
         sel = ", ".join(f"z.{q(x)}" for x in cols)
         rs = c.execute(
-            f"SELECT {EFF} AS eff, m.result AS auto_result, m.matched_by, m.payment_amount, m.difference, m.basis, m.invoice_number, m.exchange_rate, m.pay_currency, z._fee AS _fee, "
+            f"SELECT m.result, m.matched_by, m.payment_amount, m.difference, m.basis, m.invoice_number, m.exchange_rate, m.pay_currency, z._fee AS _fee, "
             f"a.agent, a.remarks, z.id AS _id, {sel} "
             f"{w2} ORDER BY z._created, z.id LIMIT ? OFFSET ?", a2 + [lim, off]).fetchall()
         out_cols, pos = with_rate_column(cols)
@@ -179,9 +169,9 @@ def matches(
             amt = r[next(x for x in cols if x.lower() == "amount")] if any(x.lower() == "amount" for x in cols) else None
             cells[pos:pos] = [effective_pay_currency(r["pay_currency"], cur), rate]
             rows.append({
-                "id": r["_id"], "result": r["eff"], "overridden": r["eff"] != r["auto_result"], "matched_by": r["matched_by"], "payment_amount": r["payment_amount"],
+                "id": r["_id"], "result": r["result"], "matched_by": r["matched_by"], "payment_amount": r["payment_amount"],
                 "fee": r["_fee"], "amount_inr": amount_inr(amt, rate, cur),
-                "difference": r["difference"], "basis": basis_text(r["basis"], r["auto_result"], r["eff"]), "invoice_number": r["invoice_number"] or "",
+                "difference": r["difference"], "basis": r["basis"], "invoice_number": r["invoice_number"] or "",
                 "agent": r["agent"], "remarks": r["remarks"] or "",
                 "cells": cells,
             })
@@ -214,21 +204,20 @@ def export_matches(result: str = "All", status: str = "captured", currency: str 
         for name in names:
             ws = wb.create_sheet(name)
             ws.append(["Invoice Number"] + out_cols + MATCH_EXTRA)
-            where, args = f"({EFF}) = ?", [name]
+            where, args = "m.result = ?", [name]
             if status and status != "All":
                 where += ' AND z."status" = ?'; args.append(status)
             if currency and has_cur:
                 where += ' AND z."currency" = ?'; args.append(currency)
             # row layout: 0 invoice | 1..n sheet cols | n+1 result, matched_by, agent, remarks, payment_amount, difference, basis | exchange_rate
             for r in c.execute(
-                f"SELECT m.invoice_number, {sel}, {EFF}, m.matched_by, a.agent, a.remarks, "
-                f"m.payment_amount, m.difference, m.basis, m.exchange_rate, z.\"_fee\", m.pay_currency, m.result "
+                f"SELECT m.invoice_number, {sel}, m.result, m.matched_by, a.agent, a.remarks, "
+                f"m.payment_amount, m.difference, m.basis, m.exchange_rate, z.\"_fee\", m.pay_currency "
                 f"FROM zoho z JOIN match_results m ON m.zoho_id = z.id LEFT JOIN annotations a ON a.zoho_id = z.id "
                 f'WHERE {where} ORDER BY z."_created", z."id"', args):
                 v = list(r)
                 cells = v[1:1 + n]
-                res, matched_by, agent, remarks, pay_amt, diff, basis, rate, fee, pay_cur, auto = v[1 + n:]
-                basis = basis_text(basis, auto, res)
+                res, matched_by, agent, remarks, pay_amt, diff, basis, rate, fee, pay_cur = v[1 + n:]
                 if res != "Matched" and not agent:
                     agent = "Unassigned"
                 rate = effective_rate(rate, cells[cur_i] if has_cur else None)
@@ -239,29 +228,6 @@ def export_matches(result: str = "All", status: str = "captured", currency: str 
     fname = f"reconciliation_{'all' if result == 'All' else result.lower()}.xlsx"
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
-
-
-class Override(BaseModel):
-    zoho_id: str
-    result: str  # "Matched" or "Mismatched": the result the user wants this payment to have
-
-
-@app.post("/api/override")
-def override(o: Override):
-    """Manually flip a payment between Matched and Mismatched. Choosing the automatic result again clears the
-    override. Missing payments have no counterpart to match against, so they can't be overridden."""
-    if o.result not in ("Matched", "Mismatched"):
-        raise HTTPException(400, "Result must be Matched or Mismatched.")
-    with conn() as c:
-        m = c.execute("SELECT result FROM match_results WHERE zoho_id = ?", (o.zoho_id,)).fetchone()
-        if not m:
-            raise HTTPException(404, "Payment not found - click Match first.")
-        if m["result"] == "Missing":
-            raise HTTPException(400, "Missing payments can't be switched to Matched/Mismatched.")
-        c.execute("INSERT OR IGNORE INTO annotations(zoho_id) VALUES (?)", (o.zoho_id,))
-        c.execute("UPDATE annotations SET override = ? WHERE zoho_id = ?",
-                  (None if o.result == m["result"] else o.result, o.zoho_id))
-    return {"ok": True}
 
 
 class Annotation(BaseModel):

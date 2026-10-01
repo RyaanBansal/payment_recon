@@ -69,8 +69,6 @@
   th.added { background:#e6edff; }
   .pager { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); }
   .empty { padding:40px; text-align:center; color:var(--muted); }
-  .badge.manual { outline:2px dashed currentColor; outline-offset:1px; }
-  button.ovr { padding:3px 10px; font-size:12px; white-space:nowrap; }
   .diffpos { color:var(--warn); } .diffneg { color:var(--bad); }
 </style>
 </head>
@@ -295,9 +293,7 @@ $("#z-reset").onclick = () => { ["#z-method", "#z-currency", "#z-from", "#z-to"]
 /* ---------------- Match / Mismatch tab ---------------- */
 const mState = { page: 1, result: "All", status: null, currency: "", q: "" };
 let agentList = [];
-async function loadMatches(keepScroll = false) {
-  const oldWrap = keepScroll ? $("#m-table .tablewrap") : null;
-  const sx = oldWrap ? oldWrap.scrollLeft : 0, sy = oldWrap ? oldWrap.scrollTop : 0;
+async function loadMatches() {
   const d = await api("/api/matches?" + qs({ result: mState.result, status: mState.status ?? "captured", currency: mState.currency, q: mState.q, page: mState.page, page_size: PAGE }));
   agentList = d.agents || [];
   // status dropdown (default: captured - failed attempts never reach Zoho, so they are noise here)
@@ -314,7 +310,7 @@ async function loadMatches(keepScroll = false) {
   if (!d.counts.All && !mState.q && !mState.currency) {
     el.innerHTML = `<div class="empty">No results yet - upload both sheets and click <b>Match</b>.</div>`; $("#m-pager").innerHTML = ""; return;
   }
-  const head = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Fees", "Amount (INR)", "Difference", "Amount Basis", "Manual Override"];
+  const head = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Fees", "Amount (INR)", "Difference", "Amount Basis"];
   const agentOpts = cur => ["Unassigned", ...new Set([...agentList, ...(cur ? [cur] : [])])].map(a => `<option ${a === (cur || "Unassigned") ? "selected" : ""}>${esc(a)}</option>`).join("");
   el.innerHTML = `<div class="tablewrap"><table><thead><tr>
       <th class="added">Invoice Number</th>
@@ -325,29 +321,19 @@ async function loadMatches(keepScroll = false) {
       return `<tr data-id="${esc(r.id)}">
         <td title="${esc(r.invoice_number)}">${esc(r.invoice_number) || "&mdash;"}</td>
         ${r.cells.map((v, i) => i === d.rate_col ? `<td class="num" title="${esc(v)}">${v == null ? "&mdash;" : esc(rate(v))}</td>` : `<td title="${esc(v)}">${esc(v)}</td>`).join("")}
-        <td><span class="badge b-${r.result} ${r.overridden ? "manual" : ""}" ${r.overridden ? 'title="Manually changed - click the button on the far right to undo"' : ""}>${r.result}${r.overridden ? " &#9998;" : ""}</span></td>
+        <td><span class="badge b-${r.result}">${r.result}</span></td>
         <td>${esc(r.matched_by)}</td>
         <td>${needsAgent ? `<select class="agent">${agentOpts(r.agent)}</select>` : "&mdash;"}</td>
         <td><input class="remarks" placeholder="Add remark..." value="${esc(r.remarks)}"></td>
-        <td class="num">${money(r.payment_amount)}</td><td class="num">${r.fee == null ? "&mdash;" : money(r.fee)}</td><td class="num">${r.amount_inr == null ? "&mdash;" : money(r.amount_inr)}</td><td class="num ${dcls}">${money(r.difference)}</td><td>${esc(r.basis)}</td>
-        <td>${r.result === "Missing" ? "&mdash;" : `<button class="ovr" data-to="${r.result === "Matched" ? "Mismatched" : "Matched"}">${r.overridden ? "Undo &middot; " : ""}Mark ${r.result === "Matched" ? "Mismatched" : "Matched"}</button>`}</td></tr>`;
+        <td class="num">${money(r.payment_amount)}</td><td class="num">${r.fee == null ? "&mdash;" : money(r.fee)}</td><td class="num">${r.amount_inr == null ? "&mdash;" : money(r.amount_inr)}</td><td class="num ${dcls}">${money(r.difference)}</td><td>${esc(r.basis)}</td></tr>`;
     }).join("") + `</tbody></table></div>`;
   if (!d.rows.length) el.innerHTML = `<div class="empty">No rows for this filter.</div>`;
   pager($("#m-pager"), mState, d.total, loadMatches);
-  const wrap = $("#m-table .tablewrap"); if (wrap && keepScroll) { wrap.scrollLeft = sx; wrap.scrollTop = sy; }
 }
 async function saveAnnotation(td, body) {
   try { await api("/api/annotation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); td.classList.add("saved"); setTimeout(() => td.classList.remove("saved"), 1200); }
   catch (e) { alert("Could not save: " + e.message); }
 }
-$("#m-table").addEventListener("click", async e => {
-  const b = e.target.closest("button.ovr"); if (!b) return;
-  const tr = b.closest("tr[data-id]"); b.disabled = true;
-  try {
-    await api("/api/override", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ zoho_id: tr.dataset.id, result: b.dataset.to }) });
-    await loadMatches(true);
-  } catch (err) { alert("Could not change the result: " + err.message); b.disabled = false; }
-});
 $("#m-table").addEventListener("change", e => {
   const tr = e.target.closest("tr[data-id]"); if (!tr) return;
   if (e.target.matches("select.agent")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, agent: e.target.value });
