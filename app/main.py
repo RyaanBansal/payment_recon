@@ -3,7 +3,7 @@ import os
 import re
 from io import BytesIO
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -104,16 +104,42 @@ def status():
 
 # ---------- upload ----------
 @app.post("/api/upload/{kind}")
-async def upload(kind: str, file: UploadFile = File(...)):
+async def upload(kind: str, files: List[UploadFile] = File(...)):
+    """Upload one or more sheets at once.
+
+    zoho (customer payments, full list): all files are combined and replace the previous data; if any file is
+    invalid nothing is changed. razorpay (kind 'zoho', monthly): each file is loaded in turn (upsert on id) and a
+    bad file doesn't stop the others - the per-file outcome is in `results`.
+    """
     if kind not in ("payments", "zoho"):
         raise HTTPException(404, "Unknown sheet type")
-    if not (file.filename or "").lower().endswith((".xlsx", ".xlsm")):
-        raise HTTPException(400, "Please upload an Excel (.xlsx) file.")
-    data = await file.read()
-    try:
-        return (ingest.load_payments if kind == "payments" else ingest.load_zoho)(data)
-    except ingest.SheetError as e:
-        raise HTTPException(400, str(e))
+    if not files:
+        raise HTTPException(400, "No files selected.")
+    for f in files:
+        if not (f.filename or "").lower().endswith((".xlsx", ".xlsm")):
+            raise HTTPException(400, f"{f.filename or 'A file'}: please upload an Excel (.xlsx) file.")
+    blobs = [(f.filename, await f.read()) for f in files]
+
+    if kind == "payments":
+        try:
+            return ingest.load_payments(blobs)
+        except ingest.SheetError as e:
+            raise HTTPException(400, str(e))
+
+    results, warnings, total_rows = [], [], 0
+    for name, data in blobs:
+        try:
+            r = ingest.load_zoho(data)
+            total_rows += r["rows"]
+            results.append({"filename": name, "ok": True, "message": r["message"], "warnings": r["warnings"]})
+            warnings += [f"{name}: {w}" for w in r["warnings"]]
+        except ingest.SheetError as e:
+            results.append({"filename": name, "ok": False, "message": str(e), "warnings": []})
+    done = sum(r["ok"] for r in results)
+    if not done:
+        raise HTTPException(400, "\n".join(f"{r['filename']}: {r['message']}" for r in results))
+    msg = f"Loaded {done} of {len(results)} Razorpay sheet(s) - {total_rows:,} rows in total."
+    return {"rows": total_rows, "message": msg, "warnings": warnings, "results": results}
 
 
 # ---------- match ----------

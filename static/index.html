@@ -23,8 +23,15 @@
   .drop input { display:none; }
   .drop .fname { font-weight:600; word-break:break-all; }
   .drop .hint { color:var(--muted); font-size:12.5px; }
-  .msg { min-height:20px; margin-top:8px; font-size:13px; }
-  .msg.ok { color:var(--ok); } .msg.err { color:var(--bad); } .msg .w { color:var(--warn); display:block; }
+  .msg { min-height:20px; margin-top:8px; font-size:13px; white-space:pre-line; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--bad); } .msg .w { color:var(--warn); display:block; } .msg .e { color:var(--bad); display:block; }
+  .flist { list-style:none; margin:10px 0 0; padding:0; max-height:170px; overflow:auto; }
+  .flist:empty { display:none; }
+  .flist li { display:flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; margin-bottom:4px; font-size:13px; }
+  .flist .fn { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .flist .fs { color:var(--muted); font-size:12px; }
+  .flist .rm { border:none; background:none; color:var(--muted); padding:0 4px; font-size:18px; line-height:1; }
+  .flist .rm:hover { color:var(--bad); }
   .meta { color:var(--muted); font-size:12.5px; margin-top:4px; }
 
   button { font:inherit; cursor:pointer; border-radius:7px; border:1px solid var(--line); background:#fff; padding:7px 14px; }
@@ -81,10 +88,11 @@
     <div class="card" id="card-payments">
       <h2>Zoho sheet</h2>
       <label class="drop" data-kind="payments">
-        <input type="file" accept=".xlsx,.xlsm">
-        <span class="fname">Click or drop the file here</span>
-        <span class="hint">Full list of customer payments (.xlsx)</span>
+        <input type="file" accept=".xlsx,.xlsm" multiple>
+        <span class="fname">Click or drop the files here</span>
+        <span class="hint">Full list of customer payments (.xlsx) &ndash; select one or more; they are combined</span>
       </label>
+      <ul class="flist"></ul>
       <button class="primary upbtn" disabled>Upload Zoho Sheet</button>
       <div class="msg"></div>
       <div class="meta"></div>
@@ -92,10 +100,11 @@
     <div class="card" id="card-zoho">
       <h2>Razorpay sheet</h2>
       <label class="drop" data-kind="zoho">
-        <input type="file" accept=".xlsx,.xlsm">
-        <span class="fname">Click or drop the file here</span>
-        <span class="hint">Monthly Razorpay payments (.xlsx)</span>
+        <input type="file" accept=".xlsx,.xlsm" multiple>
+        <span class="fname">Click or drop the files here</span>
+        <span class="hint">Monthly Razorpay payments (.xlsx) &ndash; select one or more</span>
       </label>
+      <ul class="flist"></ul>
       <button class="primary upbtn" disabled>Upload Razorpay Sheet</button>
       <div class="msg"></div>
       <div class="meta"></div>
@@ -188,24 +197,47 @@ const fmtTs = t => t ? t.replace("T", " ") : "never";
 
 /* ---------------- upload cards ---------------- */
 function setupUpload(id, kind, label) {
-  const card = $("#" + id), input = $("input", card), drop = $(".drop", card), btn = $(".upbtn", card), msg = $(".msg", card);
-  const pick = f => { input.files_ = f; $(".fname", drop).textContent = f ? f.name : "Click or drop the file here"; btn.disabled = !f; msg.textContent = ""; };
-  input.onchange = () => pick(input.files[0]);
+  const card = $("#" + id), input = $("input", card), drop = $(".drop", card), btn = $(".upbtn", card), msg = $(".msg", card), list = $(".flist", card);
+  let files = [];  // files chosen but not uploaded yet
+  const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+  const render = () => {
+    list.innerHTML = files.map((f, i) => `<li><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fs">${kb(f.size)}</span><button type="button" class="rm" data-i="${i}" title="Remove">&times;</button></li>`).join("");
+    $(".fname", drop).textContent = files.length ? `${files.length} file${files.length > 1 ? "s" : ""} selected - click or drop to add more` : "Click or drop the files here";
+    btn.textContent = files.length > 1 ? `${label} (${files.length} files)` : label;
+    btn.disabled = !files.length;
+  };
+  const add = picked => {
+    const skipped = [];
+    for (const f of picked) {
+      if (!/\.(xlsx|xlsm)$/i.test(f.name)) { skipped.push(f.name); continue; }
+      if (!files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)) files.push(f);
+    }
+    msg.className = skipped.length ? "msg err" : "msg";
+    msg.textContent = skipped.length ? `Skipped (not an .xlsx file): ${skipped.join(", ")}` : "";
+    render();
+  };
+  input.onchange = () => { add([...input.files]); input.value = ""; };
+  list.onclick = e => { const b = e.target.closest(".rm"); if (b) { files.splice(+b.dataset.i, 1); msg.textContent = ""; render(); } };
   ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(e => drop.addEventListener(e, () => drop.classList.remove("over")));
-  drop.addEventListener("drop", ev => { ev.preventDefault(); if (ev.dataTransfer.files[0]) pick(ev.dataTransfer.files[0]); });
+  drop.addEventListener("drop", ev => { ev.preventDefault(); add([...ev.dataTransfer.files]); });
   btn.onclick = async () => {
-    const f = input.files_; if (!f) return;
+    if (!files.length) return;
     btn.disabled = true; btn.textContent = "Uploading..."; msg.className = "msg";
     try {
-      const fd = new FormData(); fd.append("file", f);
+      const fd = new FormData(); files.forEach(f => fd.append("files", f));  // all selected files go up in one request
       const res = await api("/api/upload/" + kind, { method: "POST", body: fd });
-      msg.className = "msg ok";
-      msg.innerHTML = esc(res.message) + (res.warnings || []).map(w => `<span class="w">&#9888; ${esc(w)}</span>`).join("");
+      const failed = (res.results || []).filter(r => !r.ok);
+      msg.className = failed.length ? "msg err" : "msg ok";
+      msg.innerHTML = esc(res.message) + failed.map(r => `<span class="e">&#10007; ${esc(r.filename)}: ${esc(r.message)}</span>`).join("") +
+        (res.warnings || []).map(w => `<span class="w">&#9888; ${esc(w)}</span>`).join("");
+      const bad = new Set(failed.map(r => r.filename));
+      files = files.filter(f => bad.has(f.name));  // uploaded files leave the list; failed ones stay so they can be fixed/removed
       await refreshStatus(); reloadAll();
     } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
-    btn.textContent = label; btn.disabled = false;
+    render();
   };
+  render();
 }
 setupUpload("card-payments", "payments", "Upload Zoho Sheet");
 setupUpload("card-zoho", "zoho", "Upload Razorpay Sheet");

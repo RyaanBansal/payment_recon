@@ -112,31 +112,68 @@ def _ensure_columns(c, table, cols):
 
 
 # ---------- payments (customer payment sheet: full list -> replaces previous data) ----------
-def load_payments(data: bytes) -> dict:
-    headers, rows = read_raw(data)
-    _check(headers, PAY_REQUIRED, "Zoho")
-    keep = [i for i, h in enumerate(headers) if h]
-    cols = [headers[i] for i in keep]
-    idx = {h: headers.index(h) for h in cols}
+def load_payments(files) -> dict:
+    """Load one or more Zoho (customer payment) sheets in one go.
+
+    `files` is a list of (filename, bytes). The previous Zoho data is replaced by the combined contents of the
+    files. Every file is checked before the database is touched, so a bad file leaves the old data intact.
+    Rows in a later file that are identical to a row from an earlier file (overlapping exports) are skipped.
+    A single `bytes` value is accepted too.
+    """
+    if isinstance(files, (bytes, bytearray)):
+        files = [("Zoho sheet", bytes(files))]
+
+    parsed = []
+    for name, data in files:
+        try:
+            headers, rows = read_raw(data)
+            _check(headers, PAY_REQUIRED, "Zoho")
+        except SheetError as e:
+            raise SheetError(f"{name}: {e}")
+        parsed.append((name, headers, rows))
+
+    cols = []  # union of the files' columns, in first-seen order
+    for _, headers, _ in parsed:
+        for h in headers:
+            if h and h not in cols:
+                cols.append(h)
     derived = ["_date", "_amount"]
-    with conn() as c:
-        c.execute("DROP TABLE IF EXISTS payments")
-        c.execute(f"CREATE TABLE payments ({', '.join(q(x) for x in cols + derived)})")
-        for n, name in enumerate(["Reference Number", "InvoicePayment ID", "CustomerPayment ID", "Mode", "Deposit To", "_date"]):
-            c.execute(f"CREATE INDEX ix_pay_{n} ON payments({q(name)})")
-        out = []
+    out, seen, per_file, dupes = [], set(), [], 0
+    for name, headers, rows in parsed:
+        idx = {h: headers.index(h) for h in headers if h}
+        added = 0
+        file_seen = set()
         for r in rows:
-            vals = [to_text(r[i]) for i in keep]
+            vals = [to_text(r[idx[h]]) if h in idx else None for h in cols]
+            key = tuple(vals)
+            if key in seen:  # already loaded from an earlier file in this batch
+                dupes += 1
+                continue
+            file_seen.add(key)
             d = parse_dt(r[idx["Date"]])
             raw_amount = to_float(to_text(r[idx["Amount"]]))
             currency = to_text(r[idx["Currency"]]) if "Currency" in idx else None
             exchange_rate = to_float(to_text(r[idx["Exchange Rate"]])) if "Exchange Rate" in idx else None
             out.append(vals + [d.strftime("%Y-%m-%d") if d else None, normalize_amount(raw_amount, currency, exchange_rate)])
+            added += 1
+        seen |= file_seen
+        per_file.append((name, added))
+
+    with conn() as c:
+        c.execute("DROP TABLE IF EXISTS payments")
+        c.execute(f"CREATE TABLE payments ({', '.join(q(x) for x in cols + derived)})")
+        for n, name in enumerate(["Reference Number", "InvoicePayment ID", "CustomerPayment ID", "Mode", "Deposit To", "_date"]):
+            c.execute(f"CREATE INDEX ix_pay_{n} ON payments({q(name)})")
         c.executemany(f"INSERT INTO payments VALUES ({','.join('?' * (len(cols) + len(derived)))})", out)
         set_meta(c, "payments_cols", cols)
         set_meta(c, "data_updated_at", now())
         set_meta(c, "payments_loaded_at", now())
-    return {"rows": len(out), "message": f"Loaded {len(out):,} rows from the Zoho sheet (previous Zoho sheet data replaced).", "warnings": []}
+    warns = [f"{dupes:,} duplicate row(s) that appeared in more than one file were loaded only once."] if dupes else []
+    n_files = len(parsed)
+    msg = (f"Loaded {len(out):,} rows from the Zoho sheet (previous Zoho sheet data replaced)." if n_files == 1 else
+           f"Loaded {len(out):,} rows from {n_files} Zoho sheets (previous Zoho sheet data replaced).")
+    return {"rows": len(out), "message": msg, "warnings": warns,
+            "results": [{"filename": n, "ok": True, "message": f"{k:,} rows"} for n, k in per_file]}
 
 
 # ---------- zoho / razorpay (monthly sheets -> accumulate, upsert on id) ----------
