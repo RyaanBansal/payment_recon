@@ -13,11 +13,15 @@
   main { padding:18px 24px 40px; max-width:1800px; margin:0 auto; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
   h2 { margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  #card-payments h2 {margin-bottom: 24px;} #card-monthly h2 { margin-bottom: 10px; }
 
   /* upload segment: a single box, a dropdown picks which sheet the files are for */
-  .uploads { display:grid; gap:16px; }
-  .sheetpick { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); max-width:420px; margin-bottom:10px; }
-  .sheetpick select { font:inherit; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); font-size:14px; }
+  .uploads { display:grid; gap:16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .upload-actions { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:16px; margin-top:16px; }
+  .upload-actions .reconcile-btn { justify-self:start; width:auto; min-width:220px; margin-top:6px; }
+  .sheetpick { display:flex; flex-direction:row; align-items:center; gap:8px; margin:0 0 10px; color:var(--muted); max-width:420px; font:inherit; }
+  .sheetpick span { font-size:14px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); }
+  .sheetpick select { font:inherit; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); font-size:14px; min-width:180px; }
   .status-list { display:flex; flex-wrap:wrap; gap:6px 22px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); color:var(--muted); font-size:12.5px; }
   .status-list b { color:var(--text); }
   .drop { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; min-height:110px; border:2px dashed #b9c2cf;
@@ -44,7 +48,7 @@
   button:disabled { opacity:.5; cursor:not-allowed; }
   button.danger { color:#b42318; border-color:#f1b5b0; margin-left:auto; }
   button.danger:hover:not(:disabled) { background:#fef3f2; border-color:#b42318; }
-  .upbtn { width:100%; margin-top:10px; }
+  .upbtn { width:100%; margin-top:0; }
 
   .matchbar { margin:16px 0; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
   .matchbar .big { padding:10px 34px; font-size:15px; }
@@ -67,9 +71,18 @@
   .filters select, .filters input { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; min-width:130px; background:#fff; color:var(--text); }
   .filters input.date { width:120px; min-width:0; }
   .filters input.bad { border-color:var(--bad); background:var(--bad-bg); }
-  .chips { display:flex; gap:6px; }
-  .chip { padding:5px 12px; border-radius:999px; font-size:13px; }
-  .chip.active { background:var(--text); color:#fff; border-color:var(--text); }
+  .chips { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width:100%; gap:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .chip { display:flex; align-items:center; justify-content:center; padding:12px 10px; border-radius:0; border:none; font-size:14px; font-weight:700; background:#f3f5f8; color:var(--text); }
+  .chip + .chip { border-left:1px solid var(--line); }
+  .chip[data-r="All"] { background:#eaf2ff; color:#1d4ed8; }
+  .chip[data-r="Matched"] { background:#eafaf1; color:#137a3d; }
+  .chip[data-r="Mismatched"] { background:#fff6d9; color:#9a5b00; }
+  .chip[data-r="Missing"] { background:#fde8e8; color:#b3261e; }
+  .chip.active[data-r="All"] { background:#2457d6; color:#fff; }
+  .chip.active[data-r="Matched"] { background:#137a3d; color:#fff; }
+  .chip.active[data-r="Mismatched"] { background:#c78a00; color:#fff; }
+  .chip.active[data-r="Missing"] { background:#b3261e; color:#fff; }
+  .result-top { margin-bottom:12px; }
   .err-line { color:var(--bad); font-size:12.5px; margin-bottom:8px; }
 
   .tablewrap { overflow:auto; max-height:62vh; border:1px solid var(--line); border-radius:8px; }
@@ -93,90 +106,94 @@
 <header>Payment &harr; Zoho Reconciliation</header>
 <main>
 
-  <!-- 1. UPLOAD SEGMENT: Zoho (customer payments) has its own box; the dropdown of the monthly box picks the monthly sheet -->
-  <div class="uploads">
-  <section class="card" id="card-payments">
-    <h2>Zoho sheet</h2>
-    <label class="drop">
-      <input type="file" multiple>
-      <span class="fname">Click or drop the files here</span>
-      <span class="hint"></span>
-    </label>
-    <ul class="flist"></ul>
-    <button class="primary upbtn" disabled>Upload</button>
-    <div class="msg"></div>
-    <div class="status-list"></div>
-  </section>
-
-  <section class="card" id="card-monthly">
-    <h2>Monthly payment sheets</h2>
-    <label class="sheetpick">Sheet type
-      <select class="up-kind"></select>
-    </label>
-    <label class="drop">
-      <input type="file" multiple>
-      <span class="fname">Click or drop the files here</span>
-      <span class="hint"></span>
-    </label>
-    <ul class="flist"></ul>
-    <button class="primary upbtn" disabled>Upload</button>
-    <div class="msg"></div>
-    <div class="status-list"></div>
-  </section>
-  </div>
-
-  <!-- 2. MATCH BUTTON -->
-  <section class="matchbar">
-    <button class="primary big" id="matchBtn" disabled>Match</button>
-    <label title="Razorpay 'amount' includes the gateway fee; the customer payment sheet records the invoice amount. When ticked, Difference = Amount (INR) - Payment Amount - Fees; when unticked the fee is ignored.">
-      <input type="checkbox" id="feeAdjust" checked> Subtract Razorpay fee in the difference when matching (Razorpay only)
-    </label>
-    <span id="matchInfo" class="meta"></span>
-    <span id="stale" class="banner" hidden>Data changed since the last match - click Match to refresh.</span>
-  </section>
-
-  <!-- 3. TABS -->
   <nav class="tabs">
-    <button class="tab active" data-tab="match">Match / Mismatch</button>
-    <button class="tab" data-tab="pay">Zoho Sheet</button>
-    <button class="tab" data-tab="zoho">Razorpay Sheet</button>
-    <button class="tab" data-tab="kotak">Kotak Sheet</button>
-    <button class="tab" data-tab="cashfree">Cash Free Sheet</button>
+    <button class="tab active" data-tab="upload">Upload</button>
+    <button class="tab" data-tab="results">Results</button>
+    <button class="tab" data-tab="zoho">Zoho sheets</button>
+    <button class="tab" data-tab="razorpay">Razorpay sheets</button>
+    <button class="tab" data-tab="kotak">Kotak sheets</button>
+    <button class="tab" data-tab="cashfree">Cash free sheets</button>
   </nav>
 
-  <section class="panel active" id="panel-match">
-   <div class="subtabs">
-     <button class="subtab active" data-sub="razorpay">Razorpay</button>
-     <button class="subtab" data-sub="kotak">Kotak</button>
-     <button class="subtab" data-sub="cashfree">Cash Free</button>
-   </div>
-   <div class="subpanel active" id="sub-razorpay">
-    <div class="filters">
-      <div class="chips" id="chips"></div>
-      <label>Razorpay status
-        <select id="m-status"></select>
-      </label>
-      <label>Currency
-        <select id="m-currency"><option value="">All</option></select>
-      </label>
-      <label>Search (id / notes / description)
-        <input id="m-q" placeholder="e.g. pay_Ry...">
-      </label>
+  <section class="panel active" id="panel-upload">
+    <div class="uploads">
+      <section class="card" id="card-payments" data-upload-action="upload-zoho">
+        <h2>Zoho sheet</h2>
+        <label class="drop">
+          <input type="file" multiple>
+          <span class="fname">Click or drop the files here</span>
+          <span class="hint"></span>
+        </label>
+        <ul class="flist"></ul>
+        <div class="msg"></div>
+        <div class="status-list"></div>
+      </section>
+
+      <section class="card" id="card-monthly" data-upload-action="upload-monthly">
+        <h2>
+          <label class="sheetpick">
+            <span>Payment sheets</span>
+            <select class="up-kind"></select>
+          </label>
+        </h2>
+        <label class="drop">
+          <input type="file" multiple>
+          <span class="fname">Click or drop the files here</span>
+          <span class="hint"></span>
+        </label>
+        <ul class="flist"></ul>
+        <div class="msg"></div>
+        <div class="status-list"></div>
+      </section>
     </div>
-    <div class="filters dl">
-      <span class="meta">Download Excel:</span>
-      <button data-dl="All">All tables (3 sheets)</button><button data-dl="Matched">Matched</button>
-      <button data-dl="Mismatched">Mismatched</button><button data-dl="Missing">Missing</button>
-      <button class="danger" data-clear="matches:razorpay">Clear data</button>
+    <div class="upload-actions">
+      <button class="primary upbtn" id="upload-zoho" data-kind="payments" disabled>Upload Zoho Sheet</button>
+      <button class="primary upbtn" id="upload-monthly" data-kind="monthly" disabled>Upload Monthly Sheet</button>
+      <button class="primary upbtn reconcile-btn" id="matchBtn" disabled>Reconcile sheets</button>
     </div>
-    <div id="m-table"></div>
-    <div class="pager" id="m-pager"></div>
-   </div>
-   <div class="subpanel" id="sub-kotak"></div>
-   <div class="subpanel" id="sub-cashfree"></div>
   </section>
 
-  <section class="panel" id="panel-pay">
+  <section class="panel" id="panel-results">
+    <section class="matchbar">
+      <label title="Razorpay 'amount' includes the gateway fee; the customer payment sheet records the invoice amount. When ticked, Difference = Amount (INR) - Payment Amount - Fees; when unticked the fee is ignored.">
+        <input type="checkbox" id="feeAdjust" checked> Subtract Razorpay fee in the difference when matching (Razorpay only)
+      </label>
+      <span id="matchInfo" class="meta"></span>
+      <span id="stale" class="banner" hidden>Data changed since the last match - click Match to refresh.</span>
+    </section>
+
+    <div class="subtabs">
+      <button class="subtab active" data-sub="razorpay">Razorpay</button>
+      <button class="subtab" data-sub="kotak">Kotak</button>
+      <button class="subtab" data-sub="cashfree">Cash Free</button>
+    </div>
+    <div class="subpanel active" id="sub-razorpay">
+      <div class="result-top">
+        <div class="chips" id="chips"></div>
+      </div>
+      <div class="filters">
+        <label>Razorpay status
+          <select id="m-status"></select>
+        </label>
+        <label>Currency
+          <select id="m-currency"><option value="">All</option></select>
+        </label>
+        <label>Search (id / notes / description)
+          <input id="m-q" placeholder="e.g. pay_Ry...">
+        </label>
+      </div>
+      <div class="filters dl">
+        <button id="download-current-view" class="primary" type="button">Download current table</button>
+        <button class="danger" data-clear="matches:razorpay">Clear data</button>
+      </div>
+      <div id="m-table"></div>
+      <div class="pager" id="m-pager"></div>
+    </div>
+    <div class="subpanel" id="sub-kotak"></div>
+    <div class="subpanel" id="sub-cashfree"></div>
+  </section>
+
+  <section class="panel" id="panel-zoho">
     <div class="filters">
       <label>Mode <select id="p-mode"><option value="">All</option></select></label>
       <label>Deposit To <select id="p-dep"><option value="">All</option></select></label>
@@ -191,7 +208,7 @@
     <div class="pager" id="p-pager"></div>
   </section>
 
-  <section class="panel" id="panel-zoho">
+  <section class="panel" id="panel-razorpay">
     <div class="filters">
       <label>Method <select id="z-method"><option value="">All</option></select></label>
       <label>Currency <select id="z-currency"><option value="">All</option></select></label>
@@ -243,7 +260,7 @@ const MONTHLY_UPLOADS = [
 ];
 const UPLOAD_BOXES = [["#card-payments", ZOHO_UPLOAD], ["#card-monthly", MONTHLY_UPLOADS]];
 function setupUploadBox(cardSel, UPLOADS) {
-  const card = $(cardSel), pick = $(".up-kind", card) || { value: UPLOADS[0].kind, set onchange(f) {}, disabled: false }, input = $("input", card), drop = $(".drop", card), btn = $(".upbtn", card), msg = $(".msg", card), list = $(".flist", card);
+  const card = $(cardSel), pick = $(".up-kind", card) || { value: UPLOADS[0].kind, set onchange(f) {}, disabled: false }, input = $("input", card), drop = $(".drop", card), btn = document.getElementById(card.dataset.uploadAction), msg = $(".msg", card), list = $(".flist", card);
   const pending = {}, notes = {};  // per sheet type: files chosen but not uploaded yet, and the last message - switching the dropdown never mixes them up
   UPLOADS.forEach(u => { pending[u.kind] = []; notes[u.kind] = { cls: "msg", html: "" }; });
   if (pick.tagName) pick.innerHTML = UPLOADS.map(u => `<option value="${u.kind}">${esc(u.label)}</option>`).join("");
@@ -256,8 +273,11 @@ function setupUploadBox(cardSel, UPLOADS) {
     $(".hint", drop).textContent = u.hint;
     list.innerHTML = files.map((f, i) => `<li><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fs">${kb(f.size)}</span><button type="button" class="rm" data-i="${i}" title="Remove">&times;</button></li>`).join("");
     $(".fname", drop).textContent = files.length ? `${files.length} file${files.length > 1 ? "s" : ""} selected - click or drop to add more` : "Click or drop the files here";
-    btn.textContent = files.length > 1 ? `${u.btn} (${files.length} files)` : u.btn;
-    btn.disabled = !files.length;
+    if (btn) {
+      const label = files.length > 1 ? `${u.btn} (${files.length} files)` : u.btn;
+      btn.textContent = label;
+      btn.disabled = !files.length;
+    }
     msg.className = notes[u.kind].cls; msg.innerHTML = notes[u.kind].html;
   };
   const add = picked => {
@@ -276,7 +296,7 @@ function setupUploadBox(cardSel, UPLOADS) {
   ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(e => drop.addEventListener(e, () => drop.classList.remove("over")));
   drop.addEventListener("drop", ev => { ev.preventDefault(); add([...ev.dataTransfer.files]); });
-  btn.onclick = async () => {
+  if (btn) btn.onclick = async () => {
     const u = cur(), files = pending[u.kind];
     if (!files.length) return;
     pick.disabled = true; btn.disabled = true; btn.textContent = "Uploading..."; say(u, "msg", "");
@@ -309,7 +329,7 @@ $("#matchBtn").onclick = async () => {
   const b = $("#matchBtn"); b.disabled = true; b.textContent = "Matching...";
   try {
     await api("/api/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fee_adjust: $("#feeAdjust").checked }) });
-    activate("match"); mState.page = 1; Object.values(srcMatch).forEach(m => m.page = 1); await loadSub[curSub]();
+    activate("results"); mState.page = 1; Object.values(srcMatch).forEach(m => m.page = 1); await loadSub[curSub]();
   } catch (e) { alert(e.message); }
   b.textContent = "Match"; await refreshStatus();
 };
@@ -318,7 +338,7 @@ $("#matchBtn").onclick = async () => {
 function activate(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + name));
-  ({ match: () => loadSub[curSub](), pay: loadPay, zoho: loadZoho, kotak: () => loadRaw("kotak"), cashfree: () => loadRaw("cashfree") })[name]();
+  ({ upload: () => {}, results: () => loadSub[curSub](), zoho: loadPay, razorpay: loadZoho, kotak: () => loadRaw("kotak"), cashfree: () => loadRaw("cashfree") })[name]();
 }
 $$(".tab").forEach(t => t.onclick = () => activate(t.dataset.tab));
 function reloadAll() { const a = $(".tab.active").dataset.tab; activate(a); }
@@ -424,9 +444,10 @@ $("#m-table").addEventListener("change", e => {
   if (e.target.matches("select.agent")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, agent: e.target.value });
   if (e.target.matches("input.remarks")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, remarks: e.target.value });
 });
-$$("[data-dl]").forEach(b => b.onclick = () => {
-  window.location = "/api/matches/export?" + qs({ result: b.dataset.dl, status: mState.status ?? "captured", currency: mState.currency });
-});
+$("#download-current-view").onclick = () => {
+  const result = mState.result === "All" ? "All" : mState.result;
+  window.location = "/api/matches/export?" + qs({ result, status: mState.status ?? "captured", currency: mState.currency });
+};
 $("#m-currency").onchange = e => { mState.currency = e.target.value; mState.page = 1; loadMatches(); };
 $("#m-status").onchange = e => { mState.status = e.target.value; mState.page = 1; loadMatches(); };
 let qTimer; $("#m-q").oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { mState.q = e.target.value; mState.page = 1; loadMatches(); }, 300); };
