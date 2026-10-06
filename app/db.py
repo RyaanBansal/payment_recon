@@ -18,6 +18,13 @@ CREATE TABLE IF NOT EXISTS match_results(
     zoho_id TEXT PRIMARY KEY, result TEXT, matched_by TEXT,
     payment_amount REAL, difference REAL, basis TEXT, invoice_number TEXT, exchange_rate REAL, pay_currency TEXT
 );
+-- Match results of the other monthly sheets (Kotak, Cash Free ...): one row per sheet row, keyed by (sheet, row key).
+-- Agent/remarks for these rows live in `annotations`, with zoho_id = '<sheet>:<row key>'.
+CREATE TABLE IF NOT EXISTS src_match_results(
+    source TEXT, row_key TEXT, result TEXT, matched_by TEXT,
+    payment_amount REAL, difference REAL, basis TEXT, invoice_number TEXT,
+    PRIMARY KEY (source, row_key)
+);
 """
 
 

@@ -14,9 +14,12 @@
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; }
   h2 { margin:0 0 10px; font-size:14px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
 
-  /* upload segment: two spaces side by side, buttons underneath */
-  .uploads { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-  @media (max-width:800px) { .uploads { grid-template-columns:1fr; } }
+  /* upload segment: a single box, a dropdown picks which sheet the files are for */
+  .uploads { display:grid; gap:16px; }
+  .sheetpick { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); max-width:420px; margin-bottom:10px; }
+  .sheetpick select { font:inherit; padding:7px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--text); font-size:14px; }
+  .status-list { display:flex; flex-wrap:wrap; gap:6px 22px; margin-top:12px; padding-top:10px; border-top:1px solid var(--line); color:var(--muted); font-size:12.5px; }
+  .status-list b { color:var(--text); }
   .drop { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; min-height:110px; border:2px dashed #b9c2cf;
           border-radius:8px; background:#fafbfc; cursor:pointer; text-align:center; padding:12px; transition:.15s; }
   .drop:hover, .drop.over { border-color:var(--accent); background:#eef3ff; }
@@ -39,6 +42,8 @@
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
   button.primary:hover:not(:disabled) { background:var(--accent-d); border-color:var(--accent-d); }
   button:disabled { opacity:.5; cursor:not-allowed; }
+  button.danger { color:#b42318; border-color:#f1b5b0; margin-left:auto; }
+  button.danger:hover:not(:disabled) { background:#fef3f2; border-color:#b42318; }
   .upbtn { width:100%; margin-top:10px; }
 
   .matchbar { margin:16px 0; display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
@@ -51,6 +56,11 @@
   .tab.active { color:var(--accent); border-bottom-color:var(--accent); background:#fff; }
   .panel { display:none; background:#fff; border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; padding:14px; }
   .panel.active { display:block; }
+  .subtabs { display:flex; gap:6px; margin-bottom:12px; }
+  .subtab { padding:6px 16px; border-radius:999px; font-weight:600; color:var(--muted); }
+  .subtab.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .subpanel { display:none; } .subpanel.active { display:block; }
+  .selwrap { display:contents; }
 
   .filters { display:flex; flex-wrap:wrap; gap:10px 14px; align-items:flex-end; margin-bottom:12px; }
   .filters label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
@@ -83,39 +93,43 @@
 <header>Payment &harr; Zoho Reconciliation</header>
 <main>
 
-  <!-- 1. UPLOAD SEGMENT -->
-  <section class="uploads">
-    <div class="card" id="card-payments">
-      <h2>Zoho sheet</h2>
-      <label class="drop" data-kind="payments">
-        <input type="file" accept=".xlsx,.xlsm" multiple>
-        <span class="fname">Click or drop the files here</span>
-        <span class="hint">Full list of customer payments (.xlsx) &ndash; select one or more; they are combined</span>
-      </label>
-      <ul class="flist"></ul>
-      <button class="primary upbtn" disabled>Upload Zoho Sheet</button>
-      <div class="msg"></div>
-      <div class="meta"></div>
-    </div>
-    <div class="card" id="card-zoho">
-      <h2>Razorpay sheet</h2>
-      <label class="drop" data-kind="zoho">
-        <input type="file" accept=".xlsx,.xlsm" multiple>
-        <span class="fname">Click or drop the files here</span>
-        <span class="hint">Monthly Razorpay payments (.xlsx) &ndash; select one or more</span>
-      </label>
-      <ul class="flist"></ul>
-      <button class="primary upbtn" disabled>Upload Razorpay Sheet</button>
-      <div class="msg"></div>
-      <div class="meta"></div>
-    </div>
+  <!-- 1. UPLOAD SEGMENT: Zoho (customer payments) has its own box; the dropdown of the monthly box picks the monthly sheet -->
+  <div class="uploads">
+  <section class="card" id="card-payments">
+    <h2>Zoho sheet</h2>
+    <label class="drop">
+      <input type="file" multiple>
+      <span class="fname">Click or drop the files here</span>
+      <span class="hint"></span>
+    </label>
+    <ul class="flist"></ul>
+    <button class="primary upbtn" disabled>Upload</button>
+    <div class="msg"></div>
+    <div class="status-list"></div>
   </section>
+
+  <section class="card" id="card-monthly">
+    <h2>Monthly payment sheets</h2>
+    <label class="sheetpick">Sheet type
+      <select class="up-kind"></select>
+    </label>
+    <label class="drop">
+      <input type="file" multiple>
+      <span class="fname">Click or drop the files here</span>
+      <span class="hint"></span>
+    </label>
+    <ul class="flist"></ul>
+    <button class="primary upbtn" disabled>Upload</button>
+    <div class="msg"></div>
+    <div class="status-list"></div>
+  </section>
+  </div>
 
   <!-- 2. MATCH BUTTON -->
   <section class="matchbar">
     <button class="primary big" id="matchBtn" disabled>Match</button>
     <label title="Razorpay 'amount' includes the gateway fee; the customer payment sheet records the invoice amount. When ticked, Difference = Amount (INR) - Payment Amount - Fees; when unticked the fee is ignored.">
-      <input type="checkbox" id="feeAdjust" checked> Subtract Razorpay fee in the difference when matching
+      <input type="checkbox" id="feeAdjust" checked> Subtract Razorpay fee in the difference when matching (Razorpay only)
     </label>
     <span id="matchInfo" class="meta"></span>
     <span id="stale" class="banner" hidden>Data changed since the last match - click Match to refresh.</span>
@@ -126,9 +140,17 @@
     <button class="tab active" data-tab="match">Match / Mismatch</button>
     <button class="tab" data-tab="pay">Zoho Sheet</button>
     <button class="tab" data-tab="zoho">Razorpay Sheet</button>
+    <button class="tab" data-tab="kotak">Kotak Sheet</button>
+    <button class="tab" data-tab="cashfree">Cash Free Sheet</button>
   </nav>
 
   <section class="panel active" id="panel-match">
+   <div class="subtabs">
+     <button class="subtab active" data-sub="razorpay">Razorpay</button>
+     <button class="subtab" data-sub="kotak">Kotak</button>
+     <button class="subtab" data-sub="cashfree">Cash Free</button>
+   </div>
+   <div class="subpanel active" id="sub-razorpay">
     <div class="filters">
       <div class="chips" id="chips"></div>
       <label>Razorpay status
@@ -145,9 +167,13 @@
       <span class="meta">Download Excel:</span>
       <button data-dl="All">All tables (3 sheets)</button><button data-dl="Matched">Matched</button>
       <button data-dl="Mismatched">Mismatched</button><button data-dl="Missing">Missing</button>
+      <button class="danger" data-clear="matches:razorpay">Clear data</button>
     </div>
     <div id="m-table"></div>
     <div class="pager" id="m-pager"></div>
+   </div>
+   <div class="subpanel" id="sub-kotak"></div>
+   <div class="subpanel" id="sub-cashfree"></div>
   </section>
 
   <section class="panel" id="panel-pay">
@@ -158,6 +184,7 @@
       <label>Date from (yyyy-mm-dd) <input class="date" id="p-from" placeholder="yyyy-mm-dd" maxlength="10"></label>
       <label>Date to (yyyy-mm-dd) <input class="date" id="p-to" placeholder="yyyy-mm-dd" maxlength="10"></label>
       <button id="p-apply">Apply</button><button id="p-reset">Reset</button>
+      <button class="danger" data-clear="sheet:payments">Clear data</button>
     </div>
     <div class="err-line" id="p-err"></div>
     <div id="p-table"></div>
@@ -171,11 +198,15 @@
       <label>Date from (dd/mm/yyyy) <input class="date" id="z-from" placeholder="dd/mm/yyyy" maxlength="10"></label>
       <label>Date to (dd/mm/yyyy) <input class="date" id="z-to" placeholder="dd/mm/yyyy" maxlength="10"></label>
       <button id="z-apply">Apply</button><button id="z-reset">Reset</button>
+      <button class="danger" data-clear="sheet:zoho">Clear data</button>
     </div>
     <div class="err-line" id="z-err"></div>
     <div id="z-table"></div>
     <div class="pager" id="z-pager"></div>
   </section>
+
+  <section class="panel" id="panel-kotak"></section>
+  <section class="panel" id="panel-cashfree"></section>
 </main>
 
 <script>
@@ -195,59 +226,81 @@ async function api(url, opts) {
 const qs = o => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== "" && v != null)).toString();
 const fmtTs = t => t ? t.replace("T", " ") : "never";
 
-/* ---------------- upload cards ---------------- */
-function setupUpload(id, kind, label) {
-  const card = $("#" + id), input = $("input", card), drop = $(".drop", card), btn = $(".upbtn", card), msg = $(".msg", card), list = $(".flist", card);
-  let files = [];  // files chosen but not uploaded yet
+/* ---------------- upload box (one box, dropdown = which sheet) ---------------- */
+/* To support another monthly sheet: add one entry to MONTHLY_UPLOADS (and the backend side) - nothing else changes.
+   rows/at = the field names in /api/status. */
+const ZOHO_UPLOAD = [
+  { kind: "payments", label: "Zoho sheet", btn: "Upload Zoho Sheet", rows: "payments_rows", at: "payments_loaded_at", ext: /\.(xlsx|xlsm)$/i, extHint: ".xlsx", accept: ".xlsx,.xlsm",
+    hint: "Full list of customer payments (.xlsx) - select one or more; they are combined, and replace the previous Zoho sheet" },
+];
+const MONTHLY_UPLOADS = [
+  { kind: "zoho", label: "Razorpay sheet", btn: "Upload Razorpay Sheet", rows: "zoho_rows", at: "zoho_loaded_at", ext: /\.(xlsx|xlsm)$/i, extHint: ".xlsx", accept: ".xlsx,.xlsm",
+    hint: "Monthly Razorpay payments (.xlsx) - select one or more" },
+  { kind: "kotak", label: "Kotak sheet", btn: "Upload Kotak Sheet", rows: "kotak_rows", at: "kotak_loaded_at", ext: /\.(csv|xlsx|xlsm)$/i, extHint: ".csv or .xlsx", accept: ".csv,.xlsx,.xlsm",
+    hint: "Monthly Kotak statement (.csv or .xlsx) - select one or more" },
+  { kind: "cashfree", label: "Cash Free sheet", btn: "Upload Cash Free Sheet", rows: "cashfree_rows", at: "cashfree_loaded_at", ext: /\.(xlsx|xlsm)$/i, extHint: ".xlsx", accept: ".xlsx,.xlsm",
+    hint: "Monthly Cash Free transactions (.xlsx) - all month tabs are read" },
+];
+const UPLOAD_BOXES = [["#card-payments", ZOHO_UPLOAD], ["#card-monthly", MONTHLY_UPLOADS]];
+function setupUploadBox(cardSel, UPLOADS) {
+  const card = $(cardSel), pick = $(".up-kind", card) || { value: UPLOADS[0].kind, set onchange(f) {}, disabled: false }, input = $("input", card), drop = $(".drop", card), btn = $(".upbtn", card), msg = $(".msg", card), list = $(".flist", card);
+  const pending = {}, notes = {};  // per sheet type: files chosen but not uploaded yet, and the last message - switching the dropdown never mixes them up
+  UPLOADS.forEach(u => { pending[u.kind] = []; notes[u.kind] = { cls: "msg", html: "" }; });
+  if (pick.tagName) pick.innerHTML = UPLOADS.map(u => `<option value="${u.kind}">${esc(u.label)}</option>`).join("");
+  const cur = () => UPLOADS.find(u => u.kind === pick.value);
   const kb = n => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+  const say = (u, cls, html) => { notes[u.kind] = { cls, html }; if (u === cur()) { msg.className = cls; msg.innerHTML = html; } };
   const render = () => {
+    const u = cur(), files = pending[u.kind];
+    input.accept = u.accept;
+    $(".hint", drop).textContent = u.hint;
     list.innerHTML = files.map((f, i) => `<li><span class="fn" title="${esc(f.name)}">${esc(f.name)}</span><span class="fs">${kb(f.size)}</span><button type="button" class="rm" data-i="${i}" title="Remove">&times;</button></li>`).join("");
     $(".fname", drop).textContent = files.length ? `${files.length} file${files.length > 1 ? "s" : ""} selected - click or drop to add more` : "Click or drop the files here";
-    btn.textContent = files.length > 1 ? `${label} (${files.length} files)` : label;
+    btn.textContent = files.length > 1 ? `${u.btn} (${files.length} files)` : u.btn;
     btn.disabled = !files.length;
+    msg.className = notes[u.kind].cls; msg.innerHTML = notes[u.kind].html;
   };
   const add = picked => {
-    const skipped = [];
+    const u = cur(), files = pending[u.kind], skipped = [];
     for (const f of picked) {
-      if (!/\.(xlsx|xlsm)$/i.test(f.name)) { skipped.push(f.name); continue; }
+      if (!u.ext.test(f.name)) { skipped.push(f.name); continue; }
       if (!files.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)) files.push(f);
     }
-    msg.className = skipped.length ? "msg err" : "msg";
-    msg.textContent = skipped.length ? `Skipped (not an .xlsx file): ${skipped.join(", ")}` : "";
+    say(u, skipped.length ? "msg err" : "msg", skipped.length ? esc(`Skipped (not a ${u.extHint} file): ${skipped.join(", ")}`) : "");
     render();
   };
+  pick.onchange = render;
+  document.addEventListener("sheet-cleared", e => { if (notes[e.detail]) { notes[e.detail] = { cls: "msg", html: "" }; render(); } });  // its old "Loaded ..." message no longer holds
   input.onchange = () => { add([...input.files]); input.value = ""; };
-  list.onclick = e => { const b = e.target.closest(".rm"); if (b) { files.splice(+b.dataset.i, 1); msg.textContent = ""; render(); } };
+  list.onclick = e => { const b = e.target.closest(".rm"); if (b) { pending[cur().kind].splice(+b.dataset.i, 1); say(cur(), "msg", ""); render(); } };
   ["dragover", "dragenter"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("over"); }));
   ["dragleave", "drop"].forEach(e => drop.addEventListener(e, () => drop.classList.remove("over")));
   drop.addEventListener("drop", ev => { ev.preventDefault(); add([...ev.dataTransfer.files]); });
   btn.onclick = async () => {
+    const u = cur(), files = pending[u.kind];
     if (!files.length) return;
-    btn.disabled = true; btn.textContent = "Uploading..."; msg.className = "msg";
+    pick.disabled = true; btn.disabled = true; btn.textContent = "Uploading..."; say(u, "msg", "");
     try {
       const fd = new FormData(); files.forEach(f => fd.append("files", f));  // all selected files go up in one request
-      const res = await api("/api/upload/" + kind, { method: "POST", body: fd });
+      const res = await api("/api/upload/" + u.kind, { method: "POST", body: fd });
       const failed = (res.results || []).filter(r => !r.ok);
-      msg.className = failed.length ? "msg err" : "msg ok";
-      msg.innerHTML = esc(res.message) + failed.map(r => `<span class="e">&#10007; ${esc(r.filename)}: ${esc(r.message)}</span>`).join("") +
-        (res.warnings || []).map(w => `<span class="w">&#9888; ${esc(w)}</span>`).join("");
+      say(u, failed.length ? "msg err" : "msg ok", esc(res.message) + failed.map(r => `<span class="e">&#10007; ${esc(r.filename)}: ${esc(r.message)}</span>`).join("") +
+        (res.warnings || []).map(w => `<span class="w">&#9888; ${esc(w)}</span>`).join(""));
       const bad = new Set(failed.map(r => r.filename));
-      files = files.filter(f => bad.has(f.name));  // uploaded files leave the list; failed ones stay so they can be fixed/removed
+      pending[u.kind] = files.filter(f => bad.has(f.name));  // uploaded files leave the list; failed ones stay so they can be fixed/removed
       await refreshStatus(); reloadAll();
-    } catch (e) { msg.className = "msg err"; msg.textContent = e.message; }
-    render();
+    } catch (e) { say(u, "msg err", esc(e.message)); }
+    pick.disabled = false; render();
   };
   render();
 }
-setupUpload("card-payments", "payments", "Upload Zoho Sheet");
-setupUpload("card-zoho", "zoho", "Upload Razorpay Sheet");
+UPLOAD_BOXES.forEach(([sel, items]) => setupUploadBox(sel, items));
 
 /* ---------------- status + match ---------------- */
 async function refreshStatus() {
   const s = await api("/api/status");
-  $("#card-payments .meta").textContent = s.payments_rows ? `In database: ${s.payments_rows.toLocaleString()} rows (loaded ${fmtTs(s.payments_loaded_at)})` : "Nothing uploaded yet";
-  $("#card-zoho .meta").textContent = s.zoho_rows ? `In database: ${s.zoho_rows.toLocaleString()} rows (loaded ${fmtTs(s.zoho_loaded_at)})` : "Nothing uploaded yet";
-  $("#matchBtn").disabled = !(s.payments_rows && s.zoho_rows);
+  for (const [sel, items] of UPLOAD_BOXES) $(".status-list", $(sel)).innerHTML = items.map(u => `<span><b>${esc(u.label)}:</b> ${s[u.rows] ? `${s[u.rows].toLocaleString()} rows (loaded ${esc(fmtTs(s[u.at]))})` : "nothing uploaded yet"}</span>`).join("");
+  $("#matchBtn").disabled = !(s.payments_rows && (s.zoho_rows || s.kotak_rows || s.cashfree_rows));
   $("#matchInfo").textContent = s.matched_at ? `Last matched: ${fmtTs(s.matched_at)}` : "";
   $("#stale").hidden = !s.stale;
   $("#feeAdjust").checked = s.fee_adjust;
@@ -256,7 +309,7 @@ $("#matchBtn").onclick = async () => {
   const b = $("#matchBtn"); b.disabled = true; b.textContent = "Matching...";
   try {
     await api("/api/match", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ fee_adjust: $("#feeAdjust").checked }) });
-    activate("match"); mState.page = 1; await loadMatches();
+    activate("match"); mState.page = 1; Object.values(srcMatch).forEach(m => m.page = 1); await loadSub[curSub]();
   } catch (e) { alert(e.message); }
   b.textContent = "Match"; await refreshStatus();
 };
@@ -265,7 +318,7 @@ $("#matchBtn").onclick = async () => {
 function activate(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + name));
-  ({ match: loadMatches, pay: loadPay, zoho: loadZoho })[name]();
+  ({ match: () => loadSub[curSub](), pay: loadPay, zoho: loadZoho, kotak: () => loadRaw("kotak"), cashfree: () => loadRaw("cashfree") })[name]();
 }
 $$(".tab").forEach(t => t.onclick = () => activate(t.dataset.tab));
 function reloadAll() { const a = $(".tab.active").dataset.tab; activate(a); }
@@ -377,6 +430,141 @@ $$("[data-dl]").forEach(b => b.onclick = () => {
 $("#m-currency").onchange = e => { mState.currency = e.target.value; mState.page = 1; loadMatches(); };
 $("#m-status").onchange = e => { mState.status = e.target.value; mState.page = 1; loadMatches(); };
 let qTimer; $("#m-q").oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { mState.q = e.target.value; mState.page = 1; loadMatches(); }, 300); };
+
+/* ---------------- Match / Mismatch sub tabs ---------------- */
+const loadSub = { razorpay: () => loadMatches(), kotak: () => loadSrcMatch("kotak"), cashfree: () => loadSrcMatch("cashfree") };
+let curSub = "razorpay";
+$$(".subtab").forEach(b => b.onclick = () => {
+  curSub = b.dataset.sub;
+  $$(".subtab").forEach(x => x.classList.toggle("active", x === b));
+  $$(".subpanel").forEach(p => p.classList.toggle("active", p.id === "sub-" + curSub));
+  loadSub[curSub]();
+});
+
+/* ---------------- Kotak / Cash Free: match tables + original tables (one generic implementation) ---------------- */
+const SRC = { kotak: { label: "Kotak" }, cashfree: { label: "Cash Free" } };
+const filterSelects = (filters, state) => (filters || []).map(f =>
+  `<label>${esc(f.label)}<select data-param="${esc(f.param)}"><option value="All">All</option>${f.options.map(o => `<option ${o === (state[f.param] ?? f.value) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`).join("");
+const MATCH_HEAD = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Difference", "Amount Basis"];
+
+const srcMatch = {};
+for (const src of Object.keys(SRC)) {
+  srcMatch[src] = { page: 1, result: "All", filters: null, q: "" };
+  $("#sub-" + src).innerHTML = `
+    <div class="filters">
+      <div class="chips"></div>
+      <span class="selwrap"></span>
+      <label>Search<input class="s-q" placeholder="${src === "kotak" ? "ref no. / description" : "order id / reference id"}"></label>
+    </div>
+    <div class="filters dl"><span class="meta">Download Excel:</span>
+      <button data-dl="All">All tables (3 sheets)</button><button data-dl="Matched">Matched</button>
+      <button data-dl="Mismatched">Mismatched</button><button data-dl="Missing">Missing</button>
+      <button class="danger" data-clear="matches:${src}">Clear data</button></div>
+    <div class="s-table"></div><div class="pager"></div>`;
+}
+const srcParams = st => ({ ...(st.filters || {}), q: st.q });
+async function loadSrcMatch(src) {
+  const st = srcMatch[src], root = $("#sub-" + src);
+  const d = await api(`/api/recon/${src}/matches?` + qs({ result: st.result, page: st.page, page_size: PAGE, defaults: st.filters === null ? 1 : "", ...srcParams(st) }));
+  if (st.filters === null) st.filters = Object.fromEntries((d.filters || []).map(f => [f.param, f.value]));  // first load: the defaults the server picked
+  $(".selwrap", root).innerHTML = filterSelects(d.filters, st.filters);
+  $(".chips", root).innerHTML = ["All", "Matched", "Mismatched", "Missing"].map(r =>
+    `<button class="chip ${st.result === r ? "active" : ""}" data-r="${r}">${r} (${((d.counts || {})[r] || 0).toLocaleString()})</button>`).join("");
+  const el = $(".s-table", root), pg = $(".pager", root);
+  if (!d.columns.length) {
+    el.innerHTML = `<div class="empty">${d.has_sheet ? `No results yet - click <b>Match</b>.` : `No ${SRC[src].label} sheet yet - upload it above, then click <b>Match</b>.`}</div>`; pg.innerHTML = ""; return;
+  }
+  if (!d.rows.length) { el.innerHTML = `<div class="empty">No rows for this filter.</div>`; pager(pg, st, d.total, () => loadSrcMatch(src)); return; }
+  const agentOpts = cur => ["Unassigned", ...new Set([...(d.agents || []), ...(cur ? [cur] : [])])].map(a => `<option ${a === (cur || "Unassigned") ? "selected" : ""}>${esc(a)}</option>`).join("");
+  el.innerHTML = `<div class="tablewrap"><table><thead><tr><th class="added">Invoice Number</th>${d.columns.map(c => `<th>${esc(c)}</th>`).join("")}` +
+    MATCH_HEAD.map((h, i) => `<th class="${i === 2 || i === 3 ? "added" : ""}">${h}</th>`).join("") + `</tr></thead><tbody>` +
+    d.rows.map(r => {
+      const dcls = r.difference == null || Math.abs(r.difference) < 0.005 ? "" : r.difference > 0 ? "diffpos" : "diffneg";
+      return `<tr data-id="${esc(r.id)}"><td title="${esc(r.invoice_number)}">${esc(r.invoice_number) || "&mdash;"}</td>` +
+        r.cells.map(v => `<td title="${esc(v)}">${esc(v)}</td>`).join("") +
+        `<td><span class="badge b-${r.result}">${r.result}</span></td><td>${esc(r.matched_by)}</td>` +
+        `<td>${r.result !== "Matched" ? `<select class="agent">${agentOpts(r.agent)}</select>` : "&mdash;"}</td>` +
+        `<td><input class="remarks" placeholder="Add remark..." value="${esc(r.remarks)}"></td>` +
+        `<td class="num">${r.payment_amount == null ? "&mdash;" : money(r.payment_amount)}</td><td class="num ${dcls}">${r.difference == null ? "&mdash;" : money(r.difference)}</td><td>${esc(r.basis)}</td></tr>`;
+    }).join("") + `</tbody></table></div>`;
+  pager(pg, st, d.total, () => loadSrcMatch(src));
+}
+for (const src of Object.keys(SRC)) {
+  const st = srcMatch[src], root = $("#sub-" + src), reload = () => { st.page = 1; loadSrcMatch(src); };
+  root.addEventListener("click", e => { const b = e.target.closest(".chip"); if (b) { st.result = b.dataset.r; reload(); } });
+  root.addEventListener("change", e => {
+    const tr = e.target.closest("tr[data-id]");
+    if (tr) {  // agent / remarks of a row
+      if (e.target.matches("select.agent")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, agent: e.target.value });
+      if (e.target.matches("input.remarks")) saveAnnotation(e.target.parentElement, { zoho_id: tr.dataset.id, remarks: e.target.value });
+    } else if (e.target.matches("select[data-param]")) { st.filters[e.target.dataset.param] = e.target.value; reload(); }
+  });
+  let t; $(".s-q", root).oninput = e => { clearTimeout(t); t = setTimeout(() => { st.q = e.target.value; reload(); }, 300); };
+  $$("[data-dl]", root).forEach(b => b.onclick = () => { window.location = `/api/recon/${src}/export?` + qs({ result: b.dataset.dl, ...srcParams(st) }); });
+}
+
+/* original tables of the Kotak / Cash Free sheets (main tabs) */
+const rawState = {};
+for (const src of Object.keys(SRC)) {
+  rawState[src] = { page: 1, filters: {} };
+  $("#panel-" + src).innerHTML = `
+    <div class="filters">
+      <span class="selwrap"></span>
+      <label>Date from (dd-mm-yyyy) <input class="date r-from" placeholder="dd-mm-yyyy" maxlength="10"></label>
+      <label>Date to (dd-mm-yyyy) <input class="date r-to" placeholder="dd-mm-yyyy" maxlength="10"></label>
+      <button class="r-apply">Apply</button><button class="r-reset">Reset</button>
+      <button class="danger" data-clear="sheet:${src}">Clear data</button>
+    </div>
+    <div class="err-line"></div><div class="r-table"></div><div class="pager"></div>`;
+}
+const RE_DMY_DASH = /^\d{2}-\d{2}-\d{4}$/;
+async function loadRaw(src) {
+  const st = rawState[src], root = $("#panel-" + src), err = $(".err-line", root), from = $(".r-from", root), to = $(".r-to", root);
+  err.textContent = "";
+  if (!dateOk(from, RE_DMY_DASH) | !dateOk(to, RE_DMY_DASH)) { err.textContent = "Dates must be in dd-mm-yyyy format, same as the sheet."; return; }
+  try {
+    const d = await api(`/api/sheet/${src}?` + qs({ ...st.filters, date_from: from.value.trim(), date_to: to.value.trim(), page: st.page, page_size: PAGE }));
+    $(".selwrap", root).innerHTML = filterSelects(d.filters, st.filters);
+    plainTable($(".r-table", root), d.columns, d.rows); pager($(".pager", root), st, d.total, () => loadRaw(src));
+  } catch (e) { err.textContent = e.message; }
+}
+for (const src of Object.keys(SRC)) {
+  const st = rawState[src], root = $("#panel-" + src), apply = () => { st.page = 1; loadRaw(src); };
+  root.addEventListener("change", e => { if (e.target.matches("select[data-param]")) { st.filters[e.target.dataset.param] = e.target.value; apply(); } });
+  $(".r-apply", root).onclick = apply;
+  $$(".r-from,.r-to", root).forEach(i => i.onkeydown = e => e.key === "Enter" && apply());
+  $(".r-reset", root).onclick = () => { st.filters = {}; $(".r-from", root).value = ""; $(".r-to", root).value = ""; apply(); };
+}
+
+/* ---------------- Clear data buttons (one per tab / sub tab) ---------------- */
+const SHEET_NAME = { payments: "Zoho", zoho: "Razorpay", kotak: "Kotak", cashfree: "Cash Free" };
+const MATCH_NAME = { razorpay: "Razorpay", kotak: "Kotak", cashfree: "Cash Free" };
+function clearTarget(spec) {  // "sheet:<kind>" or "matches:<source>"
+  const [type, id] = spec.split(":");
+  if (type === "matches") return { url: "/api/clear/matches/" + id, text:
+    `Clear the ${MATCH_NAME[id]} match results?\n\nThis deletes the ${MATCH_NAME[id]} Match / Mismatch table and the agent / remarks entered on it. The uploaded ${MATCH_NAME[id]} sheet stays - click Match to build it again.\n\nThis cannot be undone.` };
+  return { url: "/api/clear/sheet/" + id, text: id === "payments"
+    ? `Clear the Zoho sheet?\n\nThis permanently deletes all Zoho (customer payment) rows from the database and empties every Match / Mismatch table, because they were computed against it. Upload the Zoho sheet again and click Match to rebuild.\n\nThis cannot be undone.`
+    : `Clear the ${SHEET_NAME[id]} sheet?\n\nThis permanently deletes all uploaded ${SHEET_NAME[id]} rows from the database, together with its Match / Mismatch table and the agent / remarks entered on it.\n\nThis cannot be undone.` };
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest("[data-clear]");
+  if (!b) return;
+  const t = clearTarget(b.dataset.clear);
+  if (!confirm(t.text)) return;
+  b.disabled = true;
+  try {
+    await api(t.url, { method: "POST" });
+    if (b.dataset.clear.startsWith("sheet:")) document.dispatchEvent(new CustomEvent("sheet-cleared", { detail: b.dataset.clear.slice(6) }));
+    // back to a fresh state: page 1, default filters, empty search / date boxes
+    Object.assign(mState, { page: 1, result: "All", status: null, currency: "", q: "" }); $("#m-q").value = "";
+    for (const src of Object.keys(SRC)) { Object.assign(srcMatch[src], { page: 1, result: "All", filters: null, q: "" }); $(".s-q", $("#sub-" + src)).value = ""; }
+    pState.page = 1; zState.page = 1;
+    $("#p-reset").click(); $("#z-reset").click(); $$(".r-reset").forEach(x => x.click());
+    await refreshStatus(); reloadAll();
+  } catch (err) { alert("Could not clear the data: " + err.message); }
+  b.disabled = false;
+});
 
 /* ---------------- boot ---------------- */
 (async () => { await refreshStatus(); loadMatches(); })();
