@@ -1,8 +1,9 @@
-"""Loading the Kotak bank statement and the Cash Free transactions sheet into SQLite.
+"""Loading the bank statements (Kotak, ICICI, HDFC) and the Cash Free transactions sheet into SQLite.
 
-Both are monthly sheets: uploads accumulate and re-uploading a month is safe (rows are upserted on a key built
-from the row's own content, `_key`). The sheet's own columns are stored as they are; the extra `_` columns are
-derived: `_dt` (ISO date-time), `_amount`, `_ref` (the matching id, normalised) and a few sheet specific ones.
+All are monthly / period sheets: uploads accumulate and re-uploading a period is safe (rows are upserted on a key
+built from the row's own content, `_key`). The sheet's own columns are stored as they are (dates are shown as
+dd-mm-yyyy); the extra `_` columns are derived: `_dt` (ISO date-time), `_amount`, `_ref` (the matching id,
+normalised) and a few sheet specific ones (`_drcr` = CR / DR for the bank statements).
 """
 import csv
 import hashlib
@@ -19,7 +20,8 @@ from .match_common import norm_ref
 
 warnings.filterwarnings("ignore", message="Workbook contains no default style")
 
-DISPLAY_FMT = "%d-%m-%Y %H:%M"  # how both sheets show their date-time
+DISPLAY_FMT = "%d-%m-%Y %H:%M"  # how the sheets show their date-time
+DISPLAY_DATE = "%d-%m-%Y"       # ... and their date
 
 
 # ---------- reading (csv or xlsx; xlsx -> every sheet) ----------
@@ -49,15 +51,81 @@ def _pad(rows, n):
     return [(list(r) + [None] * n)[:n] for r in rows if any(v not in (None, "") for v in r)]
 
 
+def _decode_csv(data: bytes):
+    for enc in ("utf-8-sig", "cp1252"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    raise SheetError("Could not read the file as text.")
+
+
+def _xlsx_rows(ws):
+    # some banks write a wrong sheet-size record (A1), which makes a read-only workbook look empty
+    if hasattr(ws, "reset_dimensions"):
+        ws.reset_dimensions()
+    return [list(r) for r in ws.iter_rows(values_only=True)]
+
+
+def _xls_grids(data: bytes):
+    """Old .xls workbook (HDFC) -> [(sheet name, rows)]."""
+    try:
+        import xlrd
+    except ImportError:
+        raise SheetError("Reading .xls files needs the 'xlrd' package - run: pip install xlrd")
+    try:
+        book = xlrd.open_workbook(file_contents=data)
+    except Exception as e:  # noqa: BLE001
+        raise SheetError(f"Could not open the file as an .xls workbook ({e}).")
+    out = []
+    for sh in book.sheets():
+        rows = []
+        for i in range(sh.nrows):
+            row = []
+            for cell in sh.row(i):
+                if cell.ctype in (xlrd.XL_CELL_EMPTY, xlrd.XL_CELL_BLANK):
+                    row.append(None)
+                elif cell.ctype == xlrd.XL_CELL_DATE:
+                    row.append(xlrd.xldate_as_datetime(cell.value, book.datemode))
+                else:
+                    row.append(cell.value)
+            rows.append(row)
+        out.append((sh.name, rows))
+    return out
+
+
+def read_grids(data: bytes, filename: str = ""):
+    """-> [(sheet name, rows)] with every row exactly as in the file (no header assumed). .csv / .xlsx / .xls."""
+    name = filename.lower()
+    if name.endswith(".csv"):
+        return [("csv", [r for r in csv.reader(io.StringIO(_decode_csv(data)))])]
+    if name.endswith(".xls"):
+        return _xls_grids(data)
+    try:
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    except Exception as e:  # noqa: BLE001
+        raise SheetError(f"Could not open the file as an .xlsx workbook ({e}).")
+    return [(ws.title, _xlsx_rows(ws)) for ws in wb.worksheets]
+
+
+def read_statement(data: bytes, filename: str, required: dict, label: str):
+    """Bank statements have the account details above the table and notes below it. Find the row that holds
+    the column headers (all `required` columns present) and return (display headers, canonical keys, rows
+    below it - blank lines dropped; notes / totals are left for the caller to skip)."""
+    want = set(required.values())
+    for _, rows in read_grids(data, filename):
+        for i, row in enumerate(rows):
+            shown, keys = _headers(row)
+            if want <= set(keys):
+                return shown, keys, _pad(rows[i + 1:], len(shown))
+    raise SheetError(f"This doesn't look like the {label} statement - could not find a header row with: "
+                     f"{', '.join(required)}.")
+
+
 def read_sheets(data: bytes, filename: str = ""):
     """-> [(sheet name, display headers, canonical keys, rows)]. A .csv gives one entry."""
     if filename.lower().endswith(".csv"):
-        for enc in ("utf-8-sig", "cp1252"):
-            try:
-                text = data.decode(enc)
-                break
-            except UnicodeDecodeError:
-                continue
+        text = _decode_csv(data)
         rows = [r for r in csv.reader(io.StringIO(text)) if any(v.strip() for v in r)]
         if not rows:
             raise SheetError("The file is empty.")
@@ -85,14 +153,20 @@ def _missing(keys, required):
     return [name for name, k in required.items() if k not in have]
 
 
+DATE_FORMATS = ("%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+                "%Y-%m-%d %H:%M:%S", "%Y-%m-%d",
+                "%d/%m/%Y %I:%M:%S %p",  # ICICI posted date: 02/04/2026 08:31:55 PM
+                "%d/%b/%Y",              # ICICI: 02/Apr/2026
+                "%d/%m/%y")              # HDFC: 02/04/26
+
+
 def parse_when(v):
     """Cell -> datetime (text in the sheets' dd-mm-yyyy style, or a real Excel date)."""
     if isinstance(v, datetime):
         return v
     if not isinstance(v, str):
         return None
-    for f in ("%d-%m-%Y %H:%M", "%d-%m-%Y %H:%M:%S", "%d-%m-%Y", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
-              "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+    for f in DATE_FORMATS:
         try:
             return datetime.strptime(v.strip(), f)
         except ValueError:
@@ -125,15 +199,19 @@ def _store(table, cols, derived, rows, meta_prefix):
     return len(keys) - updated, updated
 
 
+def _iso(when):
+    return when.strftime("%Y-%m-%d %H:%M:%S") if when else None
+
+
 # ---------- Kotak ----------
 KOTAK_REQUIRED = {"Transaction Date": "transactiondate", "Chq /Ref No.": "chqrefno", "Amount": "amount", "Dr / Cr": "drcr"}
 
 
-def load_kotak(data: bytes, filename: str = "") -> dict:
-    _, shown, keys, rows = read_sheets(data, filename)[0]
+def _kotak_core(shown, keys, rows, table, label) -> dict:
+    """Shared Kotak parsing for the downloaded monthly sheet data."""
     miss = _missing(keys, KOTAK_REQUIRED)
     if miss:
-        raise SheetError(f"This doesn't look like the Kotak statement - missing column(s): {', '.join(miss)}.")
+        raise SheetError(f"This doesn't look like the {label} statement - missing column(s): {', '.join(miss)}.")
     keep = [i for i, h in enumerate(shown) if h]
     cols = [shown[i] for i in keep]
     at = {k: keys.index(k) for k in keys if k}  # canonical key -> column index (first one)
@@ -157,17 +235,123 @@ def load_kotak(data: bytes, filename: str = "") -> dict:
         if key in seen:
             dupes += 1
         seen.add(key)
-        out.append([key] + vals + [when.strftime("%Y-%m-%d %H:%M:%S") if when else None, amount, norm_ref(ref),
-                                    (to_text(r[i_dc]) or "").upper()])
+        out.append([key] + vals + [_iso(when), amount, norm_ref(ref), (to_text(r[i_dc]) or "").upper()])
     if not out:
         raise SheetError("No transactions found in the statement.")
-    new, updated = _store("kotak", cols, ["_dt", "_amount", "_ref", "_drcr"], out, "kotak")
+    new, updated = _store(table, cols, ["_dt", "_amount", "_ref", "_drcr"], out, table)
     warns = []
     if skipped:
-        warns.append(f"{skipped:,} line(s) that are not transactions (e.g. the closing balance) were skipped.")
+        warns.append(f"{skipped:,} line(s) that are not transactions (e.g. the closing balance and notes) were skipped.")
     if dupes:
         warns.append(f"{dupes:,} identical row(s) were loaded only once.")
-    return {"rows": len(seen), "message": f"Loaded {len(seen):,} rows from the Kotak sheet ({new:,} new, {updated:,} updated).",
+    return {"rows": len(seen), "message": f"Loaded {len(seen):,} rows from the {label} sheet ({new:,} new, {updated:,} updated).",
+            "warnings": warns}
+
+
+def load_kotak(data: bytes, filename: str = "") -> dict:
+    _, shown, keys, rows = read_sheets(data, filename)[0]
+    return _kotak_core(shown, keys, rows, "kotak", "Kotak")
+
+
+# ---------- ICICI ----------
+ICICI_REQUIRED = {"Tran. Id": "tranid", "Transaction Date": "transactiondate",
+                  "Withdrawal Amt (INR)": "withdrawalamtinr", "Deposit Amt (INR)": "depositamtinr"}
+
+
+def _display_dates(vals, keep, r, indexes, fmt_for):
+    """Rewrite the date cells of one row to dd-mm-yyyy (keeps what the other sheets show)."""
+    for i in indexes:
+        if i is None:
+            continue
+        d = parse_when(r[i] if isinstance(r[i], datetime) else to_text(r[i]))
+        if d:
+            vals[keep.index(i)] = d.strftime(fmt_for(i))
+
+
+def load_icici(data: bytes, filename: str = "") -> dict:
+    shown, keys, rows = read_statement(data, filename, ICICI_REQUIRED, "ICICI")
+    keep = [i for i, h in enumerate(shown) if h]
+    cols = [shown[i] for i in keep]
+    at = {k: keys.index(k) for k in keys if k}
+    i_id, i_tdate, i_dep, i_wd = at["tranid"], at["transactiondate"], at["depositamtinr"], at["withdrawalamtinr"]
+    i_vdate, i_posted, i_bal = at.get("valuedate"), at.get("transactionposteddate"), at.get("balanceinr")
+    i_sn = at.get("sn")
+
+    out, seen, no_amount, dupes = [], set(), 0, 0
+    for r in rows:
+        tran_id = to_text(r[i_id])
+        if not tran_id or (i_sn is not None and not (to_text(r[i_sn]) or "").isdigit()):
+            continue  # the summary (opening / closing balance) and the legend of transaction codes at the bottom
+        dep, wd = to_float(to_text(r[i_dep])), to_float(to_text(r[i_wd]))
+        if dep is None and wd is None:
+            no_amount += 1
+            continue
+        credit = dep is not None
+        amount = dep if credit else wd
+        vals = [to_text(r[i]) for i in keep]
+        when = (parse_when(r[i_posted] if isinstance(r[i_posted], datetime) else to_text(r[i_posted])) if i_posted is not None else None) \
+            or parse_when(r[i_tdate] if isinstance(r[i_tdate], datetime) else to_text(r[i_tdate]))
+        _display_dates(vals, keep, r, (i_vdate, i_tdate, i_posted), lambda i: DISPLAY_FMT if i == i_posted else DISPLAY_DATE)
+        key = _sha(tran_id, to_text(r[i_dep]), to_text(r[i_wd]), to_text(r[i_bal]) if i_bal is not None else None)
+        if key in seen:
+            dupes += 1
+        seen.add(key)
+        out.append([key] + vals + [_iso(when), amount, norm_ref(tran_id), "CR" if credit else "DR"])
+    if not out:
+        raise SheetError("No transactions found in the statement.")
+    new, updated = _store("icici", cols, ["_dt", "_amount", "_ref", "_drcr"], out, "icici")
+    warns = []
+    if no_amount:
+        warns.append(f"{no_amount:,} line(s) without a deposit or withdrawal amount were skipped.")
+    if dupes:
+        warns.append(f"{dupes:,} identical row(s) were loaded only once.")
+    return {"rows": len(seen), "message": f"Loaded {len(seen):,} rows from the ICICI sheet ({new:,} new, {updated:,} updated).",
+            "warnings": warns}
+
+
+# ---------- HDFC ----------
+HDFC_REQUIRED = {"Date": "date", "Narration": "narration", "Chq./Ref.No.": "chqrefno", "Value Dt": "valuedt",
+                 "Withdrawal Amt.": "withdrawalamt", "Deposit Amt.": "depositamt"}
+
+
+def load_hdfc(data: bytes, filename: str = "") -> dict:
+    shown, keys, rows = read_statement(data, filename, HDFC_REQUIRED, "HDFC")
+    keep = [i for i, h in enumerate(shown) if h]
+    cols = [shown[i] for i in keep]
+    at = {k: keys.index(k) for k in keys if k}
+    i_date, i_ref, i_dep, i_wd = at["date"], at["chqrefno"], at["depositamt"], at["withdrawalamt"]
+    i_val, i_nar, i_bal = at["valuedt"], at["narration"], at.get("closingbalance")
+
+    out, seen, no_amount, dupes = [], set(), 0, 0
+    for r in rows:
+        when = parse_when(r[i_date] if isinstance(r[i_date], datetime) else to_text(r[i_date]))
+        if when is None:  # '****' separators, the statement summary and the notes at the bottom
+            continue
+        dep, wd = to_float(to_text(r[i_dep])), to_float(to_text(r[i_wd]))
+        if dep is None and wd is None:
+            no_amount += 1
+            continue
+        credit = dep is not None
+        vals = [to_text(r[i]) for i in keep]
+        _display_dates(vals, keep, r, (i_date, i_val), lambda i: DISPLAY_DATE)
+        ref = to_text(r[i_ref])
+        # '0000581598905825' -> '581598905825' (the UPI reference); the sheet's own text stays in the table
+        norm = re.sub(r"^0+", "", norm_ref(ref))
+        key = _sha(to_text(r[i_date]), to_text(r[i_val]), to_text(r[i_nar]), ref, to_text(r[i_dep]), to_text(r[i_wd]),
+                   to_text(r[i_bal]) if i_bal is not None else None)
+        if key in seen:
+            dupes += 1
+        seen.add(key)
+        out.append([key] + vals + [_iso(when), dep if credit else wd, norm, "CR" if credit else "DR"])
+    if not out:
+        raise SheetError("No transactions found in the statement.")
+    new, updated = _store("hdfc", cols, ["_dt", "_amount", "_ref", "_drcr"], out, "hdfc")
+    warns = []
+    if no_amount:
+        warns.append(f"{no_amount:,} line(s) without a deposit or withdrawal amount were skipped.")
+    if dupes:
+        warns.append(f"{dupes:,} identical row(s) were loaded only once.")
+    return {"rows": len(seen), "message": f"Loaded {len(seen):,} rows from the HDFC sheet ({new:,} new, {updated:,} updated).",
             "warnings": warns}
 
 
@@ -220,7 +404,7 @@ def load_cashfree(data: bytes, filename: str = "") -> dict:
             seen.add(key)
             order_amt = to_float(vals.get("orderamount"))
             txn_amt = to_float(vals.get("transactionamount"))
-            out.append([key] + [vals.get(k) for k in ckeys] + [when.strftime("%Y-%m-%d %H:%M:%S") if when else None,
+            out.append([key] + [vals.get(k) for k in ckeys] + [_iso(when),
                                                                   order_amt if order_amt is not None else 0.0, txn_amt,
                                                                   norm_ref(order_id)])
     if not out:

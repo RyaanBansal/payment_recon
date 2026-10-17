@@ -19,10 +19,11 @@ BY_REF = "Chq/Ref No."
 BY_REF_LOOSE = "Chq/Ref No. (prefix ignored)"
 
 
-def run(c) -> dict:
+def run(c, table: str = "kotak", source: str = SOURCE) -> dict:
+    """`table` / `source` let the Kotak matcher run against the same rules on a different table if needed."""
     exact, loose = build_payment_index(c)
     out = []
-    for r in c.execute('SELECT "_key","_ref","_amount" FROM kotak'):
+    for r in c.execute(f'SELECT "_key","_ref","_amount" FROM "{table}"'):
         ref, amount = r["_ref"], r["_amount"] or 0.0
         cand, by = None, None
         if ref:
@@ -38,4 +39,4 @@ def run(c) -> dict:
         pay_amount = total_amount(cand)
         diff, basis = amount_check(amount, pay_amount)
         out.append((r["_key"], "Matched" if basis else "Mismatched", by, pay_amount, diff, basis, invoice_numbers(cand)))
-    return save_results(c, SOURCE, out)
+    return save_results(c, source, out)

@@ -11,7 +11,7 @@ from openpyxl import Workbook
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ingest, ingest_sheets, match_cashfree, match_kotak
+from . import ingest, ingest_sheets, match_cashfree, match_hdfc, match_icici, match_kotak
 from .db import conn, get_meta, init_db, now, q, set_meta, table_exists
 from .matching import run_match
 
@@ -94,18 +94,21 @@ def status():
     with conn() as c:
         n = lambda t: c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] if table_exists(c, t) else 0  # noqa: E731
         upd, mat = get_meta(c, "data_updated_at"), get_meta(c, "matched_at")
-        return {
-            "payments_rows": n("payments"), "zoho_rows": n("zoho"), "kotak_rows": n("kotak"), "cashfree_rows": n("cashfree"),
+        out = {
+            "payments_rows": n("payments"), "zoho_rows": n("zoho"),
             "payments_loaded_at": get_meta(c, "payments_loaded_at"), "zoho_loaded_at": get_meta(c, "zoho_loaded_at"),
-            "kotak_loaded_at": get_meta(c, "kotak_loaded_at"), "cashfree_loaded_at": get_meta(c, "cashfree_loaded_at"),
             "matched_at": mat, "fee_adjust": get_meta(c, "fee_adjust", True),
             "stale": bool(mat and upd and upd > mat),
         }
+        for kind in SOURCES:  # kotak, cashfree, icici, hdfc: <kind>_rows / <kind>_loaded_at
+            out[f"{kind}_rows"] = n(kind)
+            out[f"{kind}_loaded_at"] = get_meta(c, f"{kind}_loaded_at")
+        return out
 
 
 # ---------- clear data ----------
-SHEET_KINDS = ("payments", "zoho", "kotak", "cashfree")      # uploaded sheets (table name = kind)
-MATCH_SOURCES = ("razorpay", "kotak", "cashfree")            # match tables (Razorpay's is built from the zoho sheet)
+SHEET_KINDS = ("payments", "zoho", "kotak", "cashfree", "icici", "hdfc")  # uploaded sheets (table name = kind)
+MATCH_SOURCES = ("razorpay", "kotak", "cashfree", "icici", "hdfc")        # match tables (Razorpay's is built from the zoho sheet)
 
 
 def wipe_matches(c, source: str, remarks: bool):
@@ -165,6 +168,8 @@ MONTHLY = {
     "zoho": ("Razorpay", XLSX, lambda name, data: ingest.load_zoho(data)),
     "kotak": ("Kotak", (".csv",) + XLSX, lambda name, data: ingest_sheets.load_kotak(data, name)),
     "cashfree": ("Cash Free", XLSX, lambda name, data: ingest_sheets.load_cashfree(data, name)),
+    "icici": ("ICICI", XLSX, lambda name, data: ingest_sheets.load_icici(data, name)),
+    "hdfc": ("HDFC", (".xls",) + XLSX, lambda name, data: ingest_sheets.load_hdfc(data, name)),
 }
 
 
@@ -173,9 +178,9 @@ async def upload(kind: str, files: List[UploadFile] = File(...)):
     """Upload one or more sheets at once.
 
     payments (customer payments = the Zoho sheet, full list): all files are combined and replace the previous
-    data; if any file is invalid nothing is changed. zoho (Razorpay) / kotak / cashfree (monthly): each file is
-    loaded in turn (upsert, so re-uploading a month is safe) and a bad file doesn't stop the others - the
-    per-file outcome is in `results`.
+    data; if any file is invalid nothing is changed. zoho (Razorpay) / kotak / cashfree / icici / hdfc
+    (monthly or period sheets): each file is loaded in turn (upsert, so re-uploading a period is safe) and a bad
+    file doesn't stop the others - the per-file outcome is in `results`.
     """
     if kind != "payments" and kind not in MONTHLY:
         raise HTTPException(404, "Unknown sheet type")
@@ -216,7 +221,7 @@ class MatchReq(BaseModel):
 
 
 # one matching file per sheet (see app/match_*.py); Razorpay's lives in app/matching.py
-MATCHERS = {"kotak": match_kotak.run, "cashfree": match_cashfree.run}
+MATCHERS = {"kotak": match_kotak.run, "cashfree": match_cashfree.run, "icici": match_icici.run, "hdfc": match_hdfc.run}
 
 
 @app.post("/api/match")
@@ -225,9 +230,9 @@ def match(req: MatchReq):
     with conn() as c:
         if not table_exists(c, "payments"):
             raise HTTPException(400, "Upload the Zoho sheet before matching.")
-        have = [t for t in ("zoho", "kotak", "cashfree") if table_exists(c, t)]
+        have = [t for t in ("zoho", *MATCHERS) if table_exists(c, t)]
         if not have:
-            raise HTTPException(400, "Upload at least one monthly sheet (Razorpay, Kotak or Cash Free) before matching.")
+            raise HTTPException(400, "Upload at least one monthly sheet (Razorpay, Kotak, Cash Free, ICICI, or HDFC) before matching.")
     summary = {}
     if "zoho" in have:
         summary["razorpay"] = run_match(req.fee_adjust)
@@ -429,15 +434,16 @@ def zoho(method: str = "", currency: str = "", date_from: str = "", date_to: str
         return {"columns": cols, "rows": [list(r) for r in rows], "total": total, "methods": methods, "currencies": currencies}
 
 # ======================================================================================================
-# Other monthly sheets (Kotak, Cash Free): one generic set of endpoints, driven by this table.
+# Other monthly sheets (Kotak, Cash Free, ICICI, HDFC, Kotak Statement): one generic set of endpoints, driven by this table.
 #   selects: dropdown filters; `col` is a stored column, `canon` finds the sheet's own column by canonical name.
 #   match_default: value the Match tab starts on (when that value exists in the data).
 # ======================================================================================================
-SHEET_DATE_FMT = ("dd-mm-yyyy", "%d-%m-%Y")  # both sheets show dates this way
+SHEET_DATE_FMT = ("dd-mm-yyyy", "%d-%m-%Y")  # all of these sheets show dates this way
+DRCR_SELECT = [{"param": "drcr", "label": "Dr / Cr", "col": "_drcr", "match_default": "CR"}]  # bank statements: credits first
 SOURCES = {
     "kotak": {
         "label": "Kotak", "table": "kotak",
-        "selects": [{"param": "drcr", "label": "Dr / Cr", "col": "_drcr", "match_default": "CR"}],
+        "selects": DRCR_SELECT,
         "search": ["description", "chqrefno"],
     },
     "cashfree": {
@@ -445,6 +451,16 @@ SOURCES = {
         "selects": [{"param": "status", "label": "Transaction status", "canon": "transactionstatus", "match_default": "SUCCESS"},
                     {"param": "mode", "label": "Payment mode", "canon": "paymentmode"}],
         "search": ["orderid", "cashfreeorderid", "referenceid"],
+    },
+    "icici": {
+        "label": "ICICI", "table": "icici",
+        "selects": DRCR_SELECT,
+        "search": ["transactionremarks", "tranid", "chequenorefno"],
+    },
+    "hdfc": {
+        "label": "HDFC", "table": "hdfc",
+        "selects": DRCR_SELECT,
+        "search": ["narration", "chqrefno"],
     },
 }
 SOURCE_EXTRA = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Difference", "Amount Basis"]

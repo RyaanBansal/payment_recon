@@ -55,12 +55,12 @@
   .matchbar label { display:flex; gap:6px; align-items:center; color:var(--muted); cursor:pointer; }
   .banner { padding:8px 12px; border-radius:7px; background:var(--warn-bg); color:var(--warn); font-size:13px; }
 
-  .tabs { display:flex; gap:4px; border-bottom:2px solid var(--line); }
-  .tab { border:none; background:none; padding:10px 18px; border-radius:8px 8px 0 0; font-weight:600; color:var(--muted); margin-bottom:-2px; border-bottom:2px solid transparent; }
+  .tabs { display:flex; gap:4px; border-bottom:2px solid var(--line); overflow-x:auto; }
+  .tab { border:none; background:none; padding:10px 18px; border-radius:8px 8px 0 0; font-weight:600; color:var(--muted); margin-bottom:-2px; border-bottom:2px solid transparent; white-space:nowrap; }
   .tab.active { color:var(--accent); border-bottom-color:var(--accent); background:#fff; }
   .panel { display:none; background:#fff; border:1px solid var(--line); border-top:none; border-radius:0 0 10px 10px; padding:14px; }
   .panel.active { display:block; }
-  .subtabs { display:flex; gap:6px; margin-bottom:12px; }
+  .subtabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
   .subtab { padding:6px 16px; border-radius:999px; font-weight:600; color:var(--muted); }
   .subtab.active { background:var(--accent); border-color:var(--accent); color:#fff; }
   .subpanel { display:none; } .subpanel.active { display:block; }
@@ -113,6 +113,8 @@
     <button class="tab" data-tab="razorpay">Razorpay sheets</button>
     <button class="tab" data-tab="kotak">Kotak sheets</button>
     <button class="tab" data-tab="cashfree">Cash free sheets</button>
+    <button class="tab" data-tab="icici">ICICI sheets</button>
+    <button class="tab" data-tab="hdfc">HDFC sheets</button>
   </nav>
 
   <section class="panel active" id="panel-upload">
@@ -166,6 +168,8 @@
       <button class="subtab active" data-sub="razorpay">Razorpay</button>
       <button class="subtab" data-sub="kotak">Kotak</button>
       <button class="subtab" data-sub="cashfree">Cash Free</button>
+      <button class="subtab" data-sub="icici">ICICI</button>
+      <button class="subtab" data-sub="hdfc">HDFC</button>
     </div>
     <div class="subpanel active" id="sub-razorpay">
       <div class="result-top">
@@ -191,6 +195,8 @@
     </div>
     <div class="subpanel" id="sub-kotak"></div>
     <div class="subpanel" id="sub-cashfree"></div>
+    <div class="subpanel" id="sub-icici"></div>
+    <div class="subpanel" id="sub-hdfc"></div>
   </section>
 
   <section class="panel" id="panel-zoho">
@@ -224,6 +230,8 @@
 
   <section class="panel" id="panel-kotak"></section>
   <section class="panel" id="panel-cashfree"></section>
+  <section class="panel" id="panel-icici"></section>
+  <section class="panel" id="panel-hdfc"></section>
 </main>
 
 <script>
@@ -257,6 +265,10 @@ const MONTHLY_UPLOADS = [
     hint: "Monthly Kotak statement (.csv or .xlsx) - select one or more" },
   { kind: "cashfree", label: "Cash Free sheet", btn: "Upload Cash Free Sheet", rows: "cashfree_rows", at: "cashfree_loaded_at", ext: /\.(xlsx|xlsm)$/i, extHint: ".xlsx", accept: ".xlsx,.xlsm",
     hint: "Monthly Cash Free transactions (.xlsx) - all month tabs are read" },
+  { kind: "icici", label: "ICICI sheet", btn: "Upload ICICI Sheet", rows: "icici_rows", at: "icici_loaded_at", ext: /\.(xlsx|xlsm)$/i, extHint: ".xlsx", accept: ".xlsx,.xlsm",
+    hint: "ICICI account statement (.xlsx) as downloaded - select one or more" },
+  { kind: "hdfc", label: "HDFC sheet", btn: "Upload HDFC Sheet", rows: "hdfc_rows", at: "hdfc_loaded_at", ext: /\.(xls|xlsx|xlsm)$/i, extHint: ".xls or .xlsx", accept: ".xls,.xlsx,.xlsm",
+    hint: "HDFC account statement (.xls or .xlsx) as downloaded - select one or more" },
 ];
 const UPLOAD_BOXES = [["#card-payments", ZOHO_UPLOAD], ["#card-monthly", MONTHLY_UPLOADS]];
 function setupUploadBox(cardSel, UPLOADS) {
@@ -320,7 +332,7 @@ UPLOAD_BOXES.forEach(([sel, items]) => setupUploadBox(sel, items));
 async function refreshStatus() {
   const s = await api("/api/status");
   for (const [sel, items] of UPLOAD_BOXES) $(".status-list", $(sel)).innerHTML = items.map(u => `<span><b>${esc(u.label)}:</b> ${s[u.rows] ? `${s[u.rows].toLocaleString()} rows (loaded ${esc(fmtTs(s[u.at]))})` : "nothing uploaded yet"}</span>`).join("");
-  $("#matchBtn").disabled = !(s.payments_rows && (s.zoho_rows || s.kotak_rows || s.cashfree_rows));
+  $("#matchBtn").disabled = !(s.payments_rows && MONTHLY_UPLOADS.some(u => s[u.rows]));
   $("#matchInfo").textContent = s.matched_at ? `Last matched: ${fmtTs(s.matched_at)}` : "";
   $("#stale").hidden = !s.stale;
   $("#feeAdjust").checked = s.fee_adjust;
@@ -338,7 +350,9 @@ $("#matchBtn").onclick = async () => {
 function activate(name) {
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   $$(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + name));
-  ({ upload: () => {}, results: () => loadSub[curSub](), zoho: loadPay, razorpay: loadZoho, kotak: () => loadRaw("kotak"), cashfree: () => loadRaw("cashfree") })[name]();
+  ({ upload: () => {}, results: () => loadSub[curSub](), zoho: loadPay, razorpay: loadZoho,
+     kotak: () => loadRaw("kotak"), cashfree: () => loadRaw("cashfree"),
+     icici: () => loadRaw("icici"), hdfc: () => loadRaw("hdfc") })[name]();
 }
 $$(".tab").forEach(t => t.onclick = () => activate(t.dataset.tab));
 function reloadAll() { const a = $(".tab.active").dataset.tab; activate(a); }
@@ -453,7 +467,8 @@ $("#m-status").onchange = e => { mState.status = e.target.value; mState.page = 1
 let qTimer; $("#m-q").oninput = e => { clearTimeout(qTimer); qTimer = setTimeout(() => { mState.q = e.target.value; mState.page = 1; loadMatches(); }, 300); };
 
 /* ---------------- Match / Mismatch sub tabs ---------------- */
-const loadSub = { razorpay: () => loadMatches(), kotak: () => loadSrcMatch("kotak"), cashfree: () => loadSrcMatch("cashfree") };
+const loadSub = { razorpay: () => loadMatches(), kotak: () => loadSrcMatch("kotak"), cashfree: () => loadSrcMatch("cashfree"),
+                  icici: () => loadSrcMatch("icici"), hdfc: () => loadSrcMatch("hdfc") };
 let curSub = "razorpay";
 $$(".subtab").forEach(b => b.onclick = () => {
   curSub = b.dataset.sub;
@@ -462,8 +477,14 @@ $$(".subtab").forEach(b => b.onclick = () => {
   loadSub[curSub]();
 });
 
-/* ---------------- Kotak / Cash Free: match tables + original tables (one generic implementation) ---------------- */
-const SRC = { kotak: { label: "Kotak" }, cashfree: { label: "Cash Free" } };
+/* ---------------- Kotak / Cash Free / ICICI / HDFC / Kotak Statement: match tables + original tables (one generic implementation) ---------------- */
+/* To add a sheet here: one entry in SRC (label + the search box hint), plus its tab / sub tab / panel in the HTML above. */
+const SRC = {
+  kotak: { label: "Kotak", search: "ref no. / description" },
+  cashfree: { label: "Cash Free", search: "order id / reference id" },
+  icici: { label: "ICICI", search: "tran. id / remarks" },
+  hdfc: { label: "HDFC", search: "ref no. / narration" },
+};
 const filterSelects = (filters, state) => (filters || []).map(f =>
   `<label>${esc(f.label)}<select data-param="${esc(f.param)}"><option value="All">All</option>${f.options.map(o => `<option ${o === (state[f.param] ?? f.value) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select></label>`).join("");
 const MATCH_HEAD = ["Result", "Matched By", "Agent", "Remarks", "Payment Amount", "Difference", "Amount Basis"];
@@ -475,7 +496,7 @@ for (const src of Object.keys(SRC)) {
     <div class="filters">
       <div class="chips"></div>
       <span class="selwrap"></span>
-      <label>Search<input class="s-q" placeholder="${src === "kotak" ? "ref no. / description" : "order id / reference id"}"></label>
+      <label>Search<input class="s-q" placeholder="${esc(SRC[src].search)}"></label>
     </div>
     <div class="filters dl"><span class="meta">Download Excel:</span>
       <button data-dl="All">All tables (3 sheets)</button><button data-dl="Matched">Matched</button>
@@ -524,7 +545,7 @@ for (const src of Object.keys(SRC)) {
   $$("[data-dl]", root).forEach(b => b.onclick = () => { window.location = `/api/recon/${src}/export?` + qs({ result: b.dataset.dl, ...srcParams(st) }); });
 }
 
-/* original tables of the Kotak / Cash Free sheets (main tabs) */
+/* original tables of the Kotak / Cash Free / ICICI / HDFC / Kotak Statement sheets (main tabs) */
 const rawState = {};
 for (const src of Object.keys(SRC)) {
   rawState[src] = { page: 1, filters: {} };
@@ -558,8 +579,8 @@ for (const src of Object.keys(SRC)) {
 }
 
 /* ---------------- Clear data buttons (one per tab / sub tab) ---------------- */
-const SHEET_NAME = { payments: "Zoho", zoho: "Razorpay", kotak: "Kotak", cashfree: "Cash Free" };
-const MATCH_NAME = { razorpay: "Razorpay", kotak: "Kotak", cashfree: "Cash Free" };
+const SHEET_NAME = { payments: "Zoho", zoho: "Razorpay", kotak: "Kotak", cashfree: "Cash Free", icici: "ICICI", hdfc: "HDFC" };
+const MATCH_NAME = { razorpay: "Razorpay", kotak: "Kotak", cashfree: "Cash Free", icici: "ICICI", hdfc: "HDFC" };
 function clearTarget(spec) {  // "sheet:<kind>" or "matches:<source>"
   const [type, id] = spec.split(":");
   if (type === "matches") return { url: "/api/clear/matches/" + id, text:

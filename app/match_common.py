@@ -5,6 +5,7 @@ looking up the customer payments (Zoho sheet) by Reference Number, comparing amo
 """
 import re
 from collections import defaultdict
+from datetime import datetime
 
 from .db import get_meta, set_meta, now
 
@@ -55,6 +56,74 @@ def build_payment_index(c):
         exact[ref][cp] = val
         loose[loose_ref(ref)][cp] = val
     return exact, loose
+
+
+# ---------- masked references ('xxxxxxxxxxxx5825') ----------
+MASKED = re.compile(r"[X*]+(\d{3,8})")
+
+
+def build_masked_index(c, bank=None):
+    """Some customer payments only keep the LAST DIGITS of the bank reference ('xxxxxxxxxxxx5825' for the UPI
+    reference 581598905825). Index those by their digits.
+
+    Returns {digits: {CustomerPayment ID: (amount in INR, Invoice Number, payment date 'YYYY-MM-DD')}}.
+    `bank` (e.g. 'hdfc') keeps only payments whose 'Deposit To' contains that word, which makes a last-digits
+    collision between two different banks impossible.
+    """
+    cols = get_meta(c, "payments_cols", [])
+    has_inv = "Invoice Number" in cols
+    sel = ('SELECT "CustomerPayment ID","Reference Number","_amount","_date","Deposit To"'
+           + (', "Invoice Number"' if has_inv else "") + " FROM payments")
+    idx = defaultdict(dict)
+    for n, r in enumerate(c.execute(sel)):
+        m = MASKED.fullmatch(norm_ref(r["Reference Number"]))
+        if not m:
+            continue
+        if bank and bank.lower() not in (r["Deposit To"] or "").lower():
+            continue
+        cp = r["CustomerPayment ID"] or f"row{n}"
+        idx[m.group(1)][cp] = (r["_amount"] or 0.0, r["Invoice Number"] if has_inv else None, r["_date"])
+    return idx
+
+
+def _day(s):
+    try:
+        return datetime.strptime(str(s)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def pick_masked(index, ref, amount, when, window_days=7):
+    """Find the customer payment a bank reference belongs to when the payment only has the last digits.
+
+    Candidates share the last digits AND were recorded within `window_days` of the bank date. Among them the one
+    with the same amount wins (nearest date if several). If none has the same amount, a single candidate is
+    still returned (-> Mismatched, so someone looks at it); several candidates with different amounts are
+    ambiguous, so none is returned (-> Missing).
+    Returns {CustomerPayment ID: (amount, invoice)} or None.
+    """
+    bank_day = _day(when)
+    near = {}
+    for n in {len(k) for k in index}:
+        if len(ref) < n:
+            continue
+        for cp, v in index.get(ref[-n:], {}).items():
+            d = _day(v[2])
+            if bank_day is None or d is None or abs((d - bank_day).days) <= window_days:
+                near[cp] = v
+    if not near:
+        return None
+    equal = {cp: v for cp, v in near.items() if abs(v[0] - amount) < EXACT_TOL}
+    pool = equal or near
+    if len(pool) > 1 and not equal:
+        return None
+
+    def gap(cp):
+        d = _day(pool[cp][2])
+        return (abs((d - bank_day).days) if d and bank_day else 0, cp)
+
+    best = min(pool, key=gap)
+    return {best: pool[best][:2]}
 
 
 def total_amount(cand) -> float:
